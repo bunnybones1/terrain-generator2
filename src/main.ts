@@ -9,7 +9,6 @@ import {
   Scene,
   WebGLRenderer,
 } from "three";
-import TerrainSystem from "./TerrainSystem";
 
 // 3D area container
 const view3d = document.createElement("div");
@@ -62,8 +61,6 @@ scene.add(grid);
 const axes = new AxesHelper(1);
 scene.add(axes);
 
-const terrain = new TerrainSystem(scene, camera);
-
 // Resize handling
 function resize() {
   const width = view3d.clientWidth || window.innerWidth;
@@ -79,13 +76,11 @@ window.addEventListener("resize", resize);
 window.addEventListener("keydown", (e) => {
   const key = e.key.toLowerCase();
   if (key === "r") {
-    terrain.initializeNoise();
+    //REGENERATE
   } else if (key === "e") {
     //EXPORT
   }
 });
-
-terrain.update();
 
 // Render loop
 // const startTime = performance.now();
@@ -96,9 +91,6 @@ function loop() {
   // updateTerrain(tSec);
 
   controls.update();
-
-  // Update grass visibility based on camera frustum
-  terrain.update();
 
   renderer.render(scene, camera);
   requestAnimationFrame(loop);
