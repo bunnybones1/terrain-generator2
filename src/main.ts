@@ -14,6 +14,10 @@ import {
   WebGLRenderer,
   BufferGeometry,
   Float32BufferAttribute,
+  InstancedMesh,
+  Matrix4,
+  Vector3,
+  Frustum,
 } from "three";
 import { createNoise3D } from "simplex-noise";
 import { simplifyMesh } from "./simplifyMesh";
@@ -27,10 +31,12 @@ document.body.appendChild(view3d);
 const renderer = new WebGLRenderer({ antialias: true });
 renderer.setSize(view3d.clientWidth || window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = 2; // PCFSoftShadowMap for softer shadows
 view3d.appendChild(renderer.domElement);
 
 const scene = new Scene();
-scene.background = new Color(0x0f0f13);
+scene.background = new Color(0x87ceeb); // Sky blue
 
 const camera = new PerspectiveCamera(
   55,
@@ -44,8 +50,21 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 
 scene.add(new AmbientLight(0xffffff, 0.35));
-const dirLight = new DirectionalLight(0xffffff, 1.0);
-dirLight.position.set(3, 5, 2);
+const dirLight = new DirectionalLight(0xffffff, 1.5);
+dirLight.position.set(5, 8, 3);
+dirLight.castShadow = true;
+
+// Configure shadow properties for better quality
+dirLight.shadow.mapSize.width = 2048;
+dirLight.shadow.mapSize.height = 2048;
+dirLight.shadow.camera.near = 0.5;
+dirLight.shadow.camera.far = 50;
+dirLight.shadow.camera.left = -10;
+dirLight.shadow.camera.right = 10;
+dirLight.shadow.camera.top = 10;
+dirLight.shadow.camera.bottom = -10;
+dirLight.shadow.bias = -0.0001;
+
 scene.add(dirLight);
 
 // Helpers
@@ -82,6 +101,9 @@ function initializeNoise() {
 
 initializeNoise();
 
+// Standalone low-frequency noise (do not reuse octave 0)
+const lowFreqNoise3D = createNoise3D();
+
 // Create plane geometry with 100x100 segments, lying on XZ
 const terrainGeo = new PlaneGeometry(terrainSize, terrainSize, segments, segments);
 terrainGeo.rotateX(-Math.PI / 2);
@@ -94,7 +116,7 @@ const terrainMat = new MeshStandardMaterial({
 });
 
 const terrain = new Mesh(terrainGeo, terrainMat);
-terrain.castShadow = false;
+terrain.castShadow = true;
 terrain.receiveShadow = true;
 scene.add(terrain);
 
@@ -116,12 +138,279 @@ const brownMat = new MeshStandardMaterial({
 let greenMesh: Mesh | null = null;
 let brownMesh: Mesh | null = null;
 
+// Grass system
+let grassMesh: InstancedMesh | null = null;
+const grassPositions: Vector3[] = [];
+const grassNormals: Vector3[] = [];
+const grassRotations: number[] = []; // Store Y-axis rotation for each blade
+const grassScales: number[] = []; // Store scale for each blade
+const grassChunks: Map<string, number[]> = new Map();
+const CHUNK_SIZE = 1.0; // Size of spatial grid chunks
+const MAX_GRASS_INSTANCES = 100000;
+const GRASS_DENSITY = 1000; // Grass blades per unit area
+const MAX_GRASS_DISTANCE = 8.0; // Maximum distance from camera to render grass
+
 // Store original grid positions (X and Z)
 const originalX = new Float32Array(terrainGeo.attributes.position.count);
 const originalZ = new Float32Array(terrainGeo.attributes.position.count);
 for (let i = 0; i < terrainGeo.attributes.position.count; i++) {
   originalX[i] = terrainGeo.attributes.position.getX(i);
   originalZ[i] = terrainGeo.attributes.position.getZ(i);
+}
+
+// Create grass blade geometry - a simple curved blade
+function createGrassBladeGeometry(): BufferGeometry {
+  const geometry = new BufferGeometry();
+  const width = 0.02;
+  const height = 0.15;
+  const segments = 3;
+
+  const vertices: number[] = [];
+  const indices: number[] = [];
+
+  // Create blade vertices (bent slightly)
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const y = t * height;
+    const bend = t * t * 0.1; // Quadratic bend
+    const w = width * (1 - t * 0.7); // Taper toward tip
+
+    vertices.push(-w / 2 + bend, y, 0);
+    vertices.push(w / 2 + bend, y, 0);
+  }
+
+  // Create indices for triangles
+  for (let i = 0; i < segments; i++) {
+    const base = i * 2;
+    indices.push(base, base + 1, base + 2);
+    indices.push(base + 1, base + 3, base + 2);
+  }
+
+  geometry.setAttribute("position", new Float32BufferAttribute(vertices, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+
+  // Override normals for bottom 2 vertices to point directly up
+  const normals = geometry.attributes.normal as Float32BufferAttribute;
+  normals.setXYZ(0, 0, 1, 0); // Bottom left vertex
+  normals.setXYZ(1, 0, 1, 0); // Bottom right vertex
+
+  // Blend other vertex normals 80% toward up vector
+  const upX = 0, upY = 1, upZ = 0;
+  const vertCount = geometry.attributes.position.count;
+  for (let i = 2; i < vertCount; i++) {
+    const nx = normals.getX(i);
+    const ny = normals.getY(i);
+    const nz = normals.getZ(i);
+
+    // Blend: 80% up, 20% original
+    let bx = upX * 0.5 + nx * 0.5;
+    let by = upY * 0.5 + ny * 0.5;
+    let bz = upZ * 0.5 + nz * 0.5;
+
+    // Normalize blended normal
+    const len = Math.hypot(bx, by, bz) || 1.0;
+    bx /= len; by /= len; bz /= len;
+
+    normals.setXYZ(i, bx, by, bz);
+  }
+
+  normals.needsUpdate = true;
+
+  return geometry;
+}
+
+// Scatter grass positions on mesh surface
+function scatterGrassOnMesh(mesh: Mesh): void {
+  if (!mesh.geometry.index) return;
+
+  grassPositions.length = 0;
+  grassNormals.length = 0;
+  grassRotations.length = 0;
+  grassScales.length = 0;
+  grassChunks.clear();
+
+  const pos = mesh.geometry.attributes.position;
+  const index = mesh.geometry.index;
+  const triangleCount = index.count / 3;
+
+  // Calculate total area for density distribution
+  let totalArea = 0;
+  const areas: number[] = [];
+
+  for (let i = 0; i < triangleCount; i++) {
+    const i0 = index.getX(i * 3);
+    const i1 = index.getX(i * 3 + 1);
+    const i2 = index.getX(i * 3 + 2);
+
+    const v0 = new Vector3(pos.getX(i0), pos.getY(i0), pos.getZ(i0));
+    const v1 = new Vector3(pos.getX(i1), pos.getY(i1), pos.getZ(i1));
+    const v2 = new Vector3(pos.getX(i2), pos.getY(i2), pos.getZ(i2));
+
+    const e1 = new Vector3().subVectors(v1, v0);
+    const e2 = new Vector3().subVectors(v2, v0);
+    const area = e1.cross(e2).length() * 0.5;
+
+    areas.push(area);
+    totalArea += area;
+  }
+
+  // Scatter grass based on triangle area
+  const targetGrassCount = Math.min(totalArea * GRASS_DENSITY, MAX_GRASS_INSTANCES);
+
+  for (let i = 0; i < triangleCount && grassPositions.length < targetGrassCount; i++) {
+    const i0 = index.getX(i * 3);
+    const i1 = index.getX(i * 3 + 1);
+    const i2 = index.getX(i * 3 + 2);
+
+    const v0 = new Vector3(pos.getX(i0), pos.getY(i0), pos.getZ(i0));
+    const v1 = new Vector3(pos.getX(i1), pos.getY(i1), pos.getZ(i1));
+    const v2 = new Vector3(pos.getX(i2), pos.getY(i2), pos.getZ(i2));
+
+    // Calculate face normal
+    const e1 = new Vector3().subVectors(v1, v0);
+    const e2 = new Vector3().subVectors(v2, v0);
+    const normal = new Vector3().crossVectors(e1, e2).normalize();
+
+    // Number of grass blades for this triangle proportional to its area
+    const grassCount = Math.ceil((areas[i] / totalArea) * targetGrassCount);
+
+    for (let j = 0; j < grassCount; j++) {
+      // Random point in triangle using barycentric coordinates
+      let r1 = Math.random();
+      let r2 = Math.random();
+      if (r1 + r2 > 1) {
+        r1 = 1 - r1;
+        r2 = 1 - r2;
+      }
+      const r3 = 1 - r1 - r2;
+
+      const position = new Vector3()
+        .addScaledVector(v0, r1)
+        .addScaledVector(v1, r2)
+        .addScaledVector(v2, r3);
+
+      grassPositions.push(position);
+      grassNormals.push(normal.clone());
+
+      // Add to spatial chunk
+      const chunkKey = `${Math.floor(position.x / CHUNK_SIZE)},${Math.floor(position.z / CHUNK_SIZE)}`;
+      if (!grassChunks.has(chunkKey)) {
+        grassChunks.set(chunkKey, []);
+      }
+      grassChunks.get(chunkKey)!.push(grassPositions.length - 1);
+    }
+  }
+
+  console.log(`Scattered ${grassPositions.length} grass blades`);
+}
+
+// Create instanced grass mesh
+function createGrassMesh(): void {
+  if (grassMesh) {
+    scene.remove(grassMesh);
+    grassMesh.geometry.dispose();
+    if (Array.isArray(grassMesh.material)) {
+      grassMesh.material.forEach((m) => m.dispose());
+    } else {
+      grassMesh.material.dispose();
+    }
+  }
+
+  if (grassPositions.length === 0) return;
+
+  const grassGeometry = createGrassBladeGeometry();
+
+  grassMesh = new InstancedMesh(grassGeometry, greenMat, grassPositions.length);
+  grassMesh.castShadow = false;
+  grassMesh.receiveShadow = true;
+
+  // Clear and repopulate transform arrays
+  grassRotations.length = 0;
+  grassScales.length = 0;
+
+  // Set initial transforms for all grass instances
+  const matrix = new Matrix4();
+  const rotationAxis = new Vector3(0, 1, 0);
+
+  for (let i = 0; i < grassPositions.length; i++) {
+    const position = grassPositions[i];
+    const normal = grassNormals[i];
+
+    // Random rotation around Y axis
+    const rotation = Math.random() * Math.PI * 2;
+
+    // Random scale variation
+    const scale = 0.8 + Math.random() * 0.4;
+
+    // Store transform properties
+    grassRotations.push(rotation);
+    grassScales.push(scale);
+
+    // Create transform matrix
+    matrix.identity();
+    matrix.makeRotationAxis(rotationAxis, rotation);
+    matrix.scale(new Vector3(scale, scale, scale));
+    matrix.setPosition(position);
+
+    grassMesh.setMatrixAt(i, matrix);
+  }
+
+  grassMesh.instanceMatrix.needsUpdate = true;
+  scene.add(grassMesh);
+}
+
+// Update visible grass instances based on camera frustum
+const _frustum = new Frustum();
+const _projScreenMatrix = new Matrix4();
+const _cameraPos = new Vector3();
+function updateGrassVisibility(): void {
+  if (!grassMesh || grassPositions.length === 0) return;
+
+  // Update frustum from camera
+  _projScreenMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+  _frustum.setFromProjectionMatrix(_projScreenMatrix);
+
+  // Get camera position
+  camera.getWorldPosition(_cameraPos);
+
+  // Check each grass position and update visibility
+  let visibleCount = 0;
+  const matrix = new Matrix4();
+  const position = new Vector3();
+  const rotationAxis = new Vector3(0, 1, 0);
+
+  for (let i = 0; i < grassPositions.length; i++) {
+    position.copy(grassPositions[i]);
+
+    // Calculate distance from camera
+    const distanceFromCamera = position.distanceTo(_cameraPos);
+
+    // Check if grass is within frustum and distance range
+    const isInFrustum = _frustum.containsPoint(position);
+    const isWithinDistance = distanceFromCamera <= MAX_GRASS_DISTANCE;
+    const isVisible = isInFrustum && isWithinDistance;
+
+    if (isVisible) {
+      // Restore original transform using stored rotation and scale
+      const rotation = grassRotations[i];
+      const scale = grassScales[i];
+
+      matrix.identity();
+      matrix.makeRotationAxis(rotationAxis, rotation);
+      matrix.scale(new Vector3(scale, scale, scale));
+      matrix.setPosition(grassPositions[i]);
+
+      grassMesh.setMatrixAt(i, matrix);
+      visibleCount++;
+    } else {
+      // Hide grass by scaling to zero
+      matrix.makeScale(0, 0, 0);
+      grassMesh.setMatrixAt(i, matrix);
+    }
+  }
+
+  grassMesh.instanceMatrix.needsUpdate = true;
 }
 
 // Displace vertices by simplex noise
@@ -151,7 +440,10 @@ function updateTerrain(timeSec: number) {
         octave.noise(_uv.x * octave.frequency, _uv.y * octave.frequency, t * octave.frequency);
     }
 
-    pos.setY(i, n * noiseAmplitude * 3);
+    // Low-frequency modulation for amplitude: noise in [-1,1] -> [0.5, 3]
+    const lowFreqNoise = lowFreqNoise3D(_uv.x * 0.2, _uv.y * 0.2, t * 0.2); // very low frequency
+    const ampMod = 0.5 + (lowFreqNoise + 1) * 0.5 * (3 - 0.5); // map to [0.5, 3]
+    pos.setY(i, n * noiseAmplitude * ampMod);
   }
 
   // Iteratively move vertices toward neighbor with biggest height difference
@@ -167,6 +459,17 @@ function updateTerrain(timeSec: number) {
   }
 
   const iterations = 5;
+
+  // Compute min and max height for normalization
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i < count; i++) {
+    const y = currentPos[i * 3 + 1];
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  const invRange = maxY > minY ? 1 / (maxY - minY) : 0;
+
   for (let iter = 0; iter < iterations; iter++) {
     for (let idx = 0; idx < count; idx++) {
       const baseIdx = idx * 3;
@@ -203,11 +506,14 @@ function updateTerrain(timeSec: number) {
         }
       }
 
-      // Move 50% of the distance toward the neighbor with biggest height difference
-      nextPos[baseIdx + 0] = vx + 0.5 * (targetX - vx);
+      // Movement factor between 0% and 50% based on relative height
+      const t = invRange ? (vy - minY) * invRange : 0; // 0 at min height, 1 at max height
+      const moveFactor = 0.3 * Math.min(Math.max(t, 0), 1);
+
+      nextPos[baseIdx + 0] = vx + moveFactor * (targetX - vx);
       nextPos[baseIdx + 1] = vy;
-      // nextPos[baseIdx + 1] = vy + 0.5 * (targetY - vy);
-      nextPos[baseIdx + 2] = vz + 0.5 * (targetZ - vz);
+      // nextPos[baseIdx + 1] = vy + moveFactor * (targetY - vy);
+      nextPos[baseIdx + 2] = vz + moveFactor * (targetZ - vz);
     }
 
     // Swap buffers
@@ -482,16 +788,20 @@ function separateTerrainByOrientation(geo: BufferGeometry): void {
   if (topIndices.length > 0) {
     const greenGeo = createIndexedGeometry(topIndices);
     greenMesh = new Mesh(greenGeo, greenMat);
-    greenMesh.castShadow = false;
+    greenMesh.castShadow = true;
     greenMesh.receiveShadow = true;
     scene.add(greenMesh);
+
+    // Generate grass on green mesh
+    scatterGrassOnMesh(greenMesh);
+    createGrassMesh();
   }
 
   // Create brown mesh for side faces
   if (sideIndices.length > 0) {
     const brownGeo = createIndexedGeometry(sideIndices, true);
     brownMesh = new Mesh(brownGeo, brownMat);
-    brownMesh.castShadow = false;
+    brownMesh.castShadow = true;
     brownMesh.receiveShadow = true;
     scene.add(brownMesh);
   }
@@ -531,6 +841,10 @@ function loop() {
   // updateTerrain(tSec);
 
   controls.update();
+
+  // Update grass visibility based on camera frustum
+  updateGrassVisibility();
+
   renderer.render(scene, camera);
   requestAnimationFrame(loop);
 }
