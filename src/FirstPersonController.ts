@@ -1,0 +1,288 @@
+import { PerspectiveCamera, Vector3, WebGLRenderer } from "three";
+import { TerrainSampler } from "./terrain/TerrainSampler";
+import { findIslandSpawn } from "./findIslandSpawn";
+
+// Movement helpers
+const tmpDir = new Vector3();
+const tmpRight = new Vector3();
+const up = new Vector3(0, 1, 0);
+
+const speedBoost = 1;
+const initialHeight = 0;
+
+// face a default direction along the outward angle (optional: keep as zero)
+
+export default class FirstPersonController {
+  yaw = 0;
+  pitch = -0.1;
+  keys: Record<string, boolean> = {};
+  velocityY = 0;
+  gravity = -25; // m/s^2
+  eyeHeight = 1.5; // meters above ground
+  pointerLocked = false;
+
+  // Movement modes
+  private isFlying = false;
+  private lastToggleTime = 0;
+
+  // Flying speed ramp state
+  private flySpeed = 10; // current fly speed (m/s)
+  private flyMinSpeed = 8; // minimum cruise speed (m/s)
+  private flyMaxSpeed = 600; // maximum top speed (m/s) without sprint
+  private flyAccel = 20; // m/s^2 while holding forward
+  private flyDecay = 10; // m/s^2 when not holding forward
+  private flySprintMultiplier = 2; // sprint doubles current fly speed
+
+  // Smoothing and bobbing
+  private smoothedPos = new Vector3();
+  private time = 0;
+
+  // Persistent movement target (basis for real position)
+  private target = new Vector3();
+
+  constructor(
+    private camera: PerspectiveCamera,
+    private terrainSampler: TerrainSampler,
+    renderer: WebGLRenderer,
+    spawnSeed: number
+  ) {
+    // Pointer lock for mouse look
+    renderer.domElement.addEventListener("click", () => {
+      renderer.domElement.requestPointerLock();
+    });
+    document.addEventListener("pointerlockchange", () => {
+      this.pointerLocked = document.pointerLockElement === renderer.domElement;
+    });
+    document.addEventListener("mousemove", (e) => {
+      if (!this.pointerLocked) return;
+      const sensitivity = 0.0025;
+      this.yaw -= e.movementX * sensitivity;
+      this.pitch -= e.movementY * sensitivity;
+      const maxPitch = Math.PI / 2 - 0.01;
+      if (this.pitch > maxPitch) this.pitch = maxPitch;
+      if (this.pitch < -maxPitch) this.pitch = -maxPitch;
+    });
+
+    document.addEventListener("keydown", (e) => {
+      this.keys[e.code] = true;
+      if (e.code === "KeyF") {
+        const now = performance.now();
+        if (now - this.lastToggleTime > 200) {
+          this.isFlying = !this.isFlying;
+          this.lastToggleTime = now;
+          // Reset vertical velocity when switching modes
+          this.velocityY = 0;
+          // Reset fly speed toward minimum when entering flying
+          if (this.isFlying) {
+            this.flySpeed = this.flyMinSpeed;
+          }
+        }
+      }
+    });
+    document.addEventListener("keyup", (e) => {
+      this.keys[e.code] = false;
+    });
+
+    // Use island spawn to set initial camera position at shoreline and yaw
+    const spawn = findIslandSpawn(terrainSampler.data, spawnSeed);
+    camera.position.x = spawn.x;
+    camera.position.z = spawn.z;
+    // Initialize yaw so camera faces the sea from spawn
+    // Our convention: yaw rotates around Y, forward vector is (0,0,-1) at yaw=0; to face (dx,dz), yaw = atan2(dx, -dz)
+    this.yaw = spawn.angle;
+    // height should be very close to 0; use sampler for consistency and add a small offset
+    const groundH0 = terrainSampler.getHeight(spawn.x, spawn.z) + initialHeight;
+    camera.position.y = Math.max(0, groundH0) + this.eyeHeight + 0.5;
+
+    // Initialize smoothed position
+    this.smoothedPos.copy(this.camera.position);
+
+    // Initialize persistent target to current camera position
+    this.target.copy(this.camera.position);
+  }
+  update(dt: number) {
+    // Update accumulated time
+    this.time += dt;
+
+    // Update camera orientation from yaw/pitch
+    this.camera.rotation.set(0, 0, 0);
+    this.camera.rotateY(this.yaw);
+    this.camera.rotateX(this.pitch);
+
+    const isSwimming = this.camera.position.y < 0.5 && !this.isFlying;
+
+    let moveSpeed: number;
+    let moveX = 0;
+    let moveZ = 0;
+
+    // Movement input
+    if (this.keys["KeyW"]) moveZ += 1;
+    if (this.keys["KeyS"]) moveZ -= 1;
+    if (this.keys["KeyA"]) moveX -= 1;
+    if (this.keys["KeyD"]) moveX += 1;
+    const len = Math.hypot(moveX, moveZ) || 1;
+    moveX /= len;
+    moveZ /= len;
+
+    if (this.isFlying) {
+      // Update fly speed ramp
+      const forwardHeld = moveZ > 0.5; // pressing W predominantly
+      if (forwardHeld) {
+        this.flySpeed += this.flyAccel * dt;
+      } else {
+        this.flySpeed -= this.flyDecay * dt;
+      }
+      // Clamp fly speed between min and max
+      this.flySpeed = Math.min(Math.max(this.flySpeed, this.flyMinSpeed), this.flyMaxSpeed);
+
+      // Apply sprint multiplier if held
+      const sprinting = this.keys["ShiftLeft"] || this.keys["ShiftRight"];
+      const currentFlySpeed = sprinting ? this.flySpeed * this.flySprintMultiplier : this.flySpeed;
+
+      // Flying: much faster than swimming, free 3D movement, no gravity
+      moveSpeed = currentFlySpeed * speedBoost;
+
+      // Full 3D forward/right based on camera
+      tmpDir.set(0, 0, -1).applyEuler(this.camera.rotation).normalize();
+      tmpRight.copy(tmpDir).cross(up).normalize();
+
+      const vx = (tmpRight.x * moveX + tmpDir.x * moveZ) * moveSpeed * dt;
+      let vy = (tmpRight.y * moveX + tmpDir.y * moveZ) * moveSpeed * dt;
+      const vz = (tmpRight.z * moveX + tmpDir.z * moveZ) * moveSpeed * dt;
+
+      // Vertical controls while flying
+      const verticalFlySpeed = moveSpeed; // same scale as horizontal when holding Space/Ctrl
+      if (this.keys["Space"]) vy += verticalFlySpeed * dt;
+      if (this.keys["ControlLeft"] || this.keys["ControlRight"]) vy -= verticalFlySpeed * dt;
+
+      this.target.x += vx;
+      this.target.y += vy;
+      this.target.z += vz;
+
+      // Keep camera above ground while flying
+      const groundH_fly = this.terrainSampler.getHeight(this.target.x, this.target.z);
+      const minFlyY = groundH_fly + this.eyeHeight + 1;
+      if (this.target.y < minFlyY) {
+        this.target.y = minFlyY;
+      }
+
+      // Add subtle flying bobbing and sway (lighter/faster than swimming)
+      const fbobSpeed = 0.5; // Hz-like
+      const fbobAmountY = 0.006; // meters
+      const fswayAmountX = 0.004; // meters (left-right sway)
+      const fswayAmountZ = 0.002; // meters (forward/back ripple)
+      const fw = Math.PI * 2 * fbobSpeed;
+
+      const right = tmpRight; // normalized already
+      const forward = tmpDir; // normalized already
+
+      const bobYf = Math.sin(this.time * fw) * fbobAmountY;
+      const swayXf = Math.sin(this.time * fw * 0.7) * fswayAmountX;
+      const rippleZf = Math.cos(this.time * fw * 0.9) * fswayAmountZ;
+
+      this.target.x += right.x * swayXf + forward.x * rippleZf;
+      this.target.y += bobYf;
+      this.target.z += right.z * swayXf + forward.z * rippleZf;
+
+      // No gravity while flying
+      this.velocityY = 0;
+      // When not flying, relax flySpeed toward minimum
+      if (!this.isFlying) {
+        if (this.flySpeed > this.flyMinSpeed) {
+          this.flySpeed = Math.max(this.flyMinSpeed, this.flySpeed - this.flyDecay * dt);
+        } else if (this.flySpeed < this.flyMinSpeed) {
+          this.flySpeed = Math.min(this.flyMinSpeed, this.flySpeed + this.flyDecay * dt);
+        }
+      }
+    } else if (isSwimming) {
+      // Swimming speeds: slower than walking, but sprint with Shift
+      moveSpeed = this.keys["ShiftLeft"] || this.keys["ShiftRight"] ? 6 : 2; // m/s
+      moveSpeed *= speedBoost;
+
+      // Full 3D forward direction from camera
+      tmpDir.set(0, 0, -1).applyEuler(this.camera.rotation).normalize();
+      tmpRight.copy(tmpDir).cross(up).normalize();
+
+      // 3D movement
+      const vx = (tmpRight.x * moveX + tmpDir.x * moveZ) * moveSpeed * dt;
+      let vy = (tmpRight.y * moveX + tmpDir.y * moveZ) * moveSpeed * dt;
+      const vz = (tmpRight.z * moveX + tmpDir.z * moveZ) * moveSpeed * dt;
+
+      // Vertical swim control: Space to ascend, Ctrl to descend
+      const verticalSwimSpeed = 2.5; // m/s
+      if (this.keys["Space"] && this.target.y < 0.1) {
+        vy += verticalSwimSpeed * dt;
+      } else if (this.keys["ControlLeft"] || this.keys["ControlRight"]) {
+        vy -= verticalSwimSpeed * dt;
+      }
+
+      this.target.x += vx;
+      this.target.y += vy;
+      this.target.z += vz;
+
+      // Keep camera above ground while swimming
+      const groundH_swim = this.terrainSampler.getHeight(this.target.x, this.target.z);
+      const minSwimY = groundH_swim + 0.25;
+      if (this.target.y < minSwimY) {
+        this.target.y = minSwimY;
+      }
+
+      // Add subtle swim bobbing and sway
+      const bobSpeed = 0.8; // Hz-like, scaled by 2π below
+      const bobAmountY = 0.02; // meters
+      const swayAmountX = 0.01; // meters (left-right sway)
+      const swayAmountZ = 0.006; // meters (forward-back ripple)
+      const w = Math.PI * 2 * bobSpeed;
+
+      // Directional basis for sway tied to camera
+      const right = tmpRight; // already normalized
+      const forward = tmpDir; // already normalized
+
+      const bobY = Math.sin(this.time * w) * bobAmountY;
+      const swayX = Math.sin(this.time * w * 0.5) * swayAmountX; // slower lateral sway
+      const rippleZ = Math.cos(this.time * w) * swayAmountZ;
+
+      this.target.x += right.x * swayX + forward.x * rippleZ;
+      this.target.y += bobY;
+      this.target.z += right.z * swayX + forward.z * rippleZ;
+
+      // No gravity while swimming
+      this.velocityY = 0;
+    } else {
+      // Walking speeds
+      moveSpeed = this.keys["ShiftLeft"] || this.keys["ShiftRight"] ? 12 : 4; // m/s
+      moveSpeed *= speedBoost;
+
+      // Build forward and right vectors on XZ plane
+      tmpDir.set(0, 0, -1).applyEuler(this.camera.rotation).setY(0).normalize();
+      tmpRight.copy(tmpDir).cross(up).normalize();
+
+      const dx = (tmpRight.x * moveX + tmpDir.x * moveZ) * moveSpeed * dt;
+      const dz = (tmpRight.z * moveX + tmpDir.z * moveZ) * moveSpeed * dt;
+
+      // Horizontal movement
+      this.target.x += dx;
+      this.target.z += dz;
+
+      // Gravity and ground collision
+      this.velocityY += this.gravity * dt;
+
+      const groundH = this.terrainSampler.getHeight(this.target.x, this.target.z);
+      const targetEyeY = groundH + this.eyeHeight;
+
+      let newY = this.camera.position.y + this.velocityY * dt;
+      if (newY < targetEyeY) {
+        newY = targetEyeY;
+        this.velocityY = 0;
+      }
+      this.target.y = newY;
+    }
+
+    // Lerp smoothed position towards target
+    const smoothPosLerp = 1 - Math.pow(0.0005, dt); // time-independent smoothing (~strong smoothing)
+    this.smoothedPos.lerp(this.target, smoothPosLerp);
+
+    // Apply smoothed position to camera
+    this.camera.position.copy(this.smoothedPos);
+  }
+}
