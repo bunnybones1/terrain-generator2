@@ -1,32 +1,35 @@
 import {
+  Box3,
+  BufferGeometry,
+  Frustum,
   InstancedMesh,
   Matrix4,
+  Matrix4 as TMatrix4,
   MeshStandardMaterial,
+  PerspectiveCamera,
   Quaternion,
   Scene,
   Vector3,
-  Frustum,
-  Matrix4 as TMatrix4,
-  Box3,
-  PerspectiveCamera,
-  IcosahedronGeometry,
   Euler,
 } from "three";
 import { TerrainSampler } from "../terrain/TerrainSampler";
 import { PRNG } from "../utils/PRNG";
-import { buildStoneLODGeometries } from "./geometry/stone";
 import { DirtyAABB } from "../terrain/TerrainData";
+import { buildPineLODGeometries } from "./geometry/pine";
 
-export interface StonesManagerConfig {
+export interface TreeManagerConfig {
   cellSize: number;
   density: number;
-  stoneRadius: number;
+  baseHeight: number;
+  baseRadius: number;
   lodCapacities: number[];
   manageRadius: number;
   jitter?: number;
+  minScale?: number;
+  maxScale?: number;
 }
 
-type StoneInstance = {
+type TreeInstance = {
   pos: Vector3;
   rot: Quaternion;
   scale: number;
@@ -35,7 +38,7 @@ type StoneInstance = {
 type Cell = {
   cx: number;
   cz: number;
-  stones: StoneInstance[];
+  trees: TreeInstance[];
 };
 
 type CellMeta = {
@@ -49,33 +52,29 @@ type CellMeta = {
 
 const tmpEuler = new Euler();
 
-const STONE_ON_GROUND_OFFSET = 0;
-export class StonesManager {
+export class TreeManager {
   private rng: PRNG;
-  // Virtualization parameters
   private seed: number;
 
-  // Spatial cell cache
   private cells = new Map<string, Cell>();
-  // Metadata cache for cells (coordinates and height AABB), built proactively
   private cellMeta = new Map<string, CellMeta>();
 
-  // LOD buckets
-  private lodGeoms: IcosahedronGeometry[] = [];
+  private lodGeoms: BufferGeometry[] = [];
   private lodMeshes: InstancedMesh[] = [];
   private lodCapacities: number[] = [];
   private lodDistances: number[] = [];
+  private globalMaxInstances: number = 0;
   private tmpMatrix = new Matrix4();
   private tmpQuat = new Quaternion();
   private tmpScale = new Vector3();
-  private tmpPos = new Vector3();
 
   private cellSize: number;
   private density: number;
   private jitter: number;
-  private minScale = 0.7;
-  private maxScale = 1.5;
-  private stoneRadius: number;
+  private minScale: number;
+  private maxScale: number;
+  private baseHeight: number;
+  private baseRadius: number;
   private manageRadius: number;
   private dropRadius: number;
 
@@ -85,7 +84,7 @@ export class StonesManager {
     private terrain: TerrainSampler,
     private material: MeshStandardMaterial,
     seed: number,
-    config: StonesManagerConfig
+    config: TreeManagerConfig
   ) {
     this.seed = seed;
     this.rng = new PRNG(seed);
@@ -93,59 +92,53 @@ export class StonesManager {
     // Apply configuration
     this.cellSize = config.cellSize;
     this.density = config.density;
-    this.stoneRadius = config.stoneRadius;
-    this.jitter = config.jitter ?? 0.9;
+    this.baseHeight = config.baseHeight;
+    this.baseRadius = config.baseRadius;
+    this.jitter = config.jitter ?? 0.95;
+    this.minScale = config.minScale ?? 0.7;
+    this.maxScale = config.maxScale ?? 1.4;
 
-    // Convert meters to cells for internal use
     this.manageRadius = Math.ceil(config.manageRadius / this.cellSize);
     this.dropRadius = Math.ceil(this.manageRadius * 1.2);
     this.lodCapacities = config.lodCapacities;
 
-    // Derive LOD distances from manageRadius (in meters)
-    // Highest LOD distance is half the manageRadius
-    // Each smaller LOD distance is half the one above it
     const maxLodDistance = config.manageRadius / 2;
     this.lodDistances = [];
     for (let i = 0; i < this.lodCapacities.length; i++) {
       this.lodDistances.push(maxLodDistance / Math.pow(2, this.lodCapacities.length - 1 - i));
     }
 
-    this.lodGeoms = buildStoneLODGeometries(this.stoneRadius, this.rng);
+    this.lodGeoms = buildPineLODGeometries(this.baseHeight, this.baseRadius, this.rng);
 
-    // Ensure material has smooth shading
     this.material.flatShading = false;
     this.material.needsUpdate = true;
+
+    // Default global cap equals sum of per-LOD capacities; can be raised by changing lodCapacities
+    this.globalMaxInstances = this.lodCapacities.reduce((a, b) => a + b, 0);
 
     this.lodMeshes = this.lodGeoms.slice(0, this.lodCapacities.length).map((g, i) => {
       const mesh = new InstancedMesh(g, this.material, this.lodCapacities[i]);
       mesh.count = 0;
-      mesh.instanceMatrix.setUsage(35048); // DynamicDrawUsage
+      mesh.instanceMatrix.setUsage(35048);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
-
-      // Disable renderer frustum culling for this instanced mesh
       mesh.frustumCulled = false;
 
-      // Expand geometry bounds to safely include the entire management area around the camera.
-      // Using manageRadius in cells converted to world meters.
+      // Large bounds to avoid per-instance culling
       const maxRadiusMeters =
         this.manageRadius * this.cellSize + Math.max(...this.lodDistances) + 20;
       const half = maxRadiusMeters;
-      const maxHeight = 2000; // generous vertical bound
+      const maxHeight = 2000;
       const minHeight = -2000;
-
-      // Ensure bounding sphere exists and is large enough
-      mesh.geometry.computeBoundingSphere();
-      if (mesh.geometry.boundingSphere) {
-        mesh.geometry.boundingSphere.center.set(0, 0, 0);
-        mesh.geometry.boundingSphere.radius = Math.max(mesh.geometry.boundingSphere.radius, half);
+      g.computeBoundingSphere();
+      if (g.boundingSphere) {
+        g.boundingSphere.center.set(0, 0, 0);
+        g.boundingSphere.radius = Math.max(g.boundingSphere.radius, half);
       }
-
-      // Set an expansive bounding box as well
-      mesh.geometry.computeBoundingBox();
-      if (mesh.geometry.boundingBox) {
-        mesh.geometry.boundingBox.min.set(-half, minHeight, -half);
-        mesh.geometry.boundingBox.max.set(half, maxHeight, half);
+      g.computeBoundingBox();
+      if (g.boundingBox) {
+        g.boundingBox.min.set(-half, minHeight, -half);
+        g.boundingBox.max.set(half, maxHeight, half);
       }
 
       this.scene.add(mesh);
@@ -153,9 +146,7 @@ export class StonesManager {
     });
   }
 
-  // Hash utility to get deterministic pseudo-random numbers from integer cell coords
   private hash2i(xi: number, zi: number, k: number): number {
-    // Robert Jenkins' 32 bit integer hash variant mixed with seed and stream k
     let h = xi * 374761393 + zi * 668265263 + (this.seed ^ (k * 1274126177));
     h = (h ^ (h >>> 13)) | 0;
     h = Math.imul(h, 1274126177);
@@ -165,7 +156,6 @@ export class StonesManager {
   private rand01(xi: number, zi: number, k: number): number {
     return this.hash2i(xi, zi, k) / 4294967295;
   }
-
   private key(cx: number, cz: number): string {
     return `${cx},${cz}`;
   }
@@ -181,7 +171,6 @@ export class StonesManager {
     const maxX = (cx + 1) * cs;
     const maxZ = (cz + 1) * cs;
 
-    // Sample terrain heights at corners and center once
     const ySamples = [
       this.terrain.getSample(minX, minZ).baseHeight,
       this.terrain.getSample(maxX, minZ).baseHeight,
@@ -189,8 +178,8 @@ export class StonesManager {
       this.terrain.getSample(maxX, maxZ).baseHeight,
       this.terrain.getSample((minX + maxX) * 0.5, (minZ + maxZ) * 0.5).baseHeight,
     ];
-    const minY = Math.min(...ySamples) - this.maxScale - 1;
-    const maxY = Math.max(...ySamples) + this.maxScale + 1;
+    const minY = Math.min(...ySamples) - this.maxScale * this.baseHeight - 1;
+    const maxY = Math.max(...ySamples) + this.maxScale * this.baseHeight + 1;
 
     const meta: CellMeta = {
       cx,
@@ -206,61 +195,57 @@ export class StonesManager {
 
   private buildCell(cx: number, cz: number): Cell {
     const cs = this.cellSize;
-    const stones: StoneInstance[] = [];
+    const trees: TreeInstance[] = [];
 
-    // Expected count per cell from density
     const cellArea = cs * cs;
     const expectedPerCell = this.density * cellArea;
-    const maxTrials = 5;
-    let count = 0;
-    let acc = expectedPerCell;
-    for (let t = 0; t < maxTrials; t++) {
-      const p = Math.min(1, acc);
-      if (this.rand01(cx + t * 17, cz - t * 23, 0) < p) count++;
-      acc -= 1;
-      if (acc <= 0) break;
-    }
-
+    // Convert expectedPerCell to an integer count:
+    // - Spawn floor(expectedPerCell) guaranteed
+    // - Plus one extra with probability equal to the fractional part
+    const base = Math.floor(expectedPerCell);
+    const frac = expectedPerCell - base;
+    let count = base;
+    if (frac > 0 && this.rand01(cx + 17, cz - 23, 0) < frac) count++;
     for (let i = 0; i < count; i++) {
-      const rx = (this.rand01(cx, cz, 1 + i * 3) * 2 - 1) * this.jitter;
-      const rz = (this.rand01(cx, cz, 2 + i * 3) * 2 - 1) * this.jitter;
+      const rx = (this.rand01(cx, cz, 1 + i * 5) * 2 - 1) * this.jitter;
+      const rz = (this.rand01(cx, cz, 2 + i * 5) * 2 - 1) * this.jitter;
       const x = (cx + 0.5 + rx) * cs;
       const z = (cz + 0.5 + rz) * cs;
 
-      const y = this.terrain.getSample(x, z).baseHeight;
-      const slope = this.terrain.getSlope(x, z);
-      if (y > 0 && slope < 0.5) continue;
+      const sample = this.terrain.getSample(x, z);
+      const y = sample.baseHeight;
+      const pineWindow = sample.pineWindow;
+      if (pineWindow <= 0) continue;
 
-      // Generate full random rotation using three independent random angles
-      const rotX = this.rand01(cx, cz, 3 + i * 5) * Math.PI * 2;
-      const rotY = this.rand01(cx, cz, 4 + i * 5) * Math.PI * 2;
-      const rotZ = this.rand01(cx, cz, 5 + i * 5) * Math.PI * 2;
-      const quat = new Quaternion().setFromEuler(tmpEuler.set(rotX, rotY, rotZ));
+      // Tree yaw around Y mostly; small tilt X/Z for natural feel
+      const yaw = this.rand01(cx, cz, 3 + i * 5) * Math.PI * 2;
+      const tiltX = (this.rand01(cx, cz, 4 + i * 5) * 2 - 1) * 0.06;
+      const tiltZ = (this.rand01(cx, cz, 5 + i * 5) * 2 - 1) * 0.06;
+      const quat = new Quaternion().setFromEuler(tmpEuler.set(tiltX, yaw, tiltZ));
 
-      const s01 = this.rand01(cx, cz, 6 + i * 5);
+      // Scale influenced by pineWindow; add small per-instance variance
+      const variance = this.rand01(cx, cz, 6 + i * 5) * 0.2 - 0.1; // -0.1..0.1
+      const s01 = Math.min(1, Math.max(0, pineWindow + variance));
       const scale = this.minScale + (this.maxScale - this.minScale) * s01;
 
-      stones.push({
-        pos: new Vector3(x, y + STONE_ON_GROUND_OFFSET, z),
+      trees.push({
+        pos: new Vector3(x, y, z),
         rot: quat,
         scale,
       });
     }
 
-    return { cx, cz, stones };
+    return { cx, cz, trees };
   }
 
-  // Build a frustum from a camera
   private getCameraFrustum(camera: PerspectiveCamera): Frustum {
     const projView = new TMatrix4().multiplyMatrices(
       camera.projectionMatrix,
       camera.matrixWorldInverse
     );
     return new Frustum().setFromProjectionMatrix(projView);
-    // Note: three.js Frustum.setFromProjectionMatrix uses clip-space planes from projView
   }
 
-  // Test if a cell's AABB intersects the frustum
   private cellIntersectsFrustum(cx: number, cz: number, frustum: Frustum): boolean {
     const cs = this.cellSize;
     const minX = cx * cs;
@@ -278,10 +263,9 @@ export class StonesManager {
     const ccx = Math.floor(camera.position.x / cs);
     const ccz = Math.floor(camera.position.z / cs);
     const frustum = this.getCameraFrustum(camera);
-    const nearKeepDistanceMeters = 40;
+    const nearKeepDistanceMeters = 30;
     const nearKeepDist2 = nearKeepDistanceMeters * nearKeepDistanceMeters;
 
-    // Create needed cells within manageRadius that intersect frustum (by AABB) or are near camera
     for (let dz = -this.manageRadius; dz <= this.manageRadius; dz++) {
       for (let dx = -this.manageRadius; dx <= this.manageRadius; dx++) {
         const cx = ccx + dx;
@@ -290,13 +274,11 @@ export class StonesManager {
         if (!this.cells.has(k)) {
           const meta = this.getOrCreateMeta(cx, cz);
 
-          // Near-keep based on distance to the cell center using cached meta
           const dxw = meta.centerX - camera.position.x;
           const dzw = meta.centerZ - camera.position.z;
           const dist2 = dxw * dxw + dzw * dzw;
           const nearCamera = dist2 <= nearKeepDist2;
 
-          // Frustum test considers full cell AABB via cellIntersectsFrustum
           if (nearCamera || this.cellIntersectsFrustum(cx, cz, frustum)) {
             const cell = this.buildCell(cx, cz);
             this.cells.set(k, cell);
@@ -305,13 +287,11 @@ export class StonesManager {
       }
     }
 
-    // Evict cells beyond dropRadius or whose AABB does not intersect frustum, but never drop near-camera cells
     for (const [k, cell] of this.cells) {
       const distCx = cell.cx - ccx;
       const distCz = cell.cz - ccz;
       const outsideRadius = Math.max(Math.abs(distCx), Math.abs(distCz)) > this.dropRadius;
 
-      // Near-keep check using cell center distance
       const centerX = (cell.cx + 0.5) * cs;
       const centerZ = (cell.cz + 0.5) * cs;
       const dxw = centerX - camera.position.x;
@@ -319,7 +299,6 @@ export class StonesManager {
       const dist2 = dxw * dxw + dzw * dzw;
       const nearCamera = dist2 <= nearKeepDist2;
 
-      // AABB-based frustum intersection
       const outsideFrustum = !nearCamera && !this.cellIntersectsFrustum(cell.cx, cell.cz, frustum);
 
       if ((outsideRadius || outsideFrustum) && !nearCamera) {
@@ -328,15 +307,12 @@ export class StonesManager {
     }
   }
 
-  // Fill meshes based on cached cells around camera each frame
   update(camera: PerspectiveCamera, dirtyAABBs?: DirtyAABB[]) {
-    // Maintain cell cache around camera
     this.ensureCellsAround(camera);
 
-    // If there are dirty AABBs, update stones in any cells that overlap with the AABBs
     if (dirtyAABBs && dirtyAABBs.length > 0) {
       const cs = this.cellSize;
-      const eps = 0.5; // expand bounds to catch edge stones and FP issues
+      const eps = 0.5;
 
       for (const raw of dirtyAABBs) {
         const aabb = {
@@ -346,7 +322,6 @@ export class StonesManager {
           maxZ: raw.maxZ + eps,
         };
 
-        // Determine overlapped cell range using expanded bounds
         const minCx = Math.floor(aabb.minX / cs);
         const maxCx = Math.floor(aabb.maxX / cs);
         const minCz = Math.floor(aabb.minZ / cs);
@@ -358,20 +333,13 @@ export class StonesManager {
             const cell = this.cells.get(k);
             if (!cell) continue;
 
-            // Robust: update all stones in overlapped cells (fast and safe),
-            // alternatively keep an inclusion test with tolerance if desired.
-            for (const inst of cell.stones) {
+            for (const inst of cell.trees) {
               const x = inst.pos.x;
               const z = inst.pos.z;
-              // If you wish to restrict to AABB, keep this tolerant check:
-              // if (x < aabb.minX || x > aabb.maxX || z < aabb.minZ || z > aabb.maxZ) continue;
-
               const sample = this.terrain.getSample(x, z);
-              inst.pos.y = sample.baseHeight + STONE_ON_GROUND_OFFSET;
+              inst.pos.y = sample.baseHeight;
             }
 
-            // Recompute cell meta min/max Y from fresh terrain samples to keep culling correct
-            // Sample terrain at corners and center to rebuild conservative vertical bounds
             const minX = cx * cs;
             const minZ = cz * cs;
             const maxX = (cx + 1) * cs;
@@ -384,24 +352,16 @@ export class StonesManager {
               this.terrain.getSample((minX + maxX) * 0.5, (minZ + maxZ) * 0.5).baseHeight,
             ];
             const meta = this.getOrCreateMeta(cx, cz);
-            meta.minY = Math.min(...ySamples) - this.maxScale - 1;
-            meta.maxY = Math.max(...ySamples) + this.maxScale + 1;
+            meta.minY = Math.min(...ySamples) - this.maxScale * this.baseHeight - 1;
+            meta.maxY = Math.max(...ySamples) + this.maxScale * this.baseHeight + 1;
           }
         }
       }
     }
 
-    // Reset counts
     this.lodMeshes.forEach((m) => (m.count = 0));
 
-    // Iterate all stones in cache and assign to LOD bucket
     const thresholds = this.lodDistances;
-
-    // Optional global cap
-    const globalMax = 0;
-    let globalCount = 0;
-
-    // Collect and sort cells by distance from camera (closest first)
     const sortedCells = Array.from(this.cells.values());
     sortedCells.sort((a, b) => {
       const cs = this.cellSize;
@@ -414,12 +374,21 @@ export class StonesManager {
       return da2 - db2;
     });
 
+    let placed = 0;
+    let saturatedLogged = false;
+
     for (const cell of sortedCells) {
-      for (const inst of cell.stones) {
-        if (globalMax > 0 && globalCount >= globalMax) break;
+      for (const inst of cell.trees) {
+        if (this.globalMaxInstances > 0 && placed >= this.globalMaxInstances) {
+          if (!saturatedLogged) {
+            console.debug(`[${this.name}] global instance cap reached:`, this.globalMaxInstances);
+            saturatedLogged = true;
+          }
+          break;
+        }
 
         const dist = inst.pos.distanceTo(camera.position);
-        let bucket = thresholds.length; // default to coarsest
+        let bucket = thresholds.length;
         for (let i = 0; i < thresholds.length; i++) {
           if (dist < thresholds[i]) {
             bucket = i;
@@ -428,7 +397,7 @@ export class StonesManager {
         }
         if (bucket >= this.lodMeshes.length) bucket = this.lodMeshes.length - 1;
 
-        // Try preferred bucket; spill to coarser if full
+        // Try preferred bucket; if full, spill to coarser LODs; if all full, skip
         let targetBucket = bucket;
         while (
           targetBucket < this.lodMeshes.length &&
@@ -436,8 +405,19 @@ export class StonesManager {
         ) {
           targetBucket++;
         }
+
         if (targetBucket >= this.lodMeshes.length) {
-          continue;
+          // All finer-to-coarser are full; try last coarsest explicitly
+          targetBucket = this.lodMeshes.length - 1;
+          if (this.lodMeshes[targetBucket].count >= this.lodCapacities[targetBucket]) {
+            if (!saturatedLogged) {
+              console.debug(
+                `[${this.name}] LOD capacities saturated; increase lodCapacities to see higher density.`
+              );
+              saturatedLogged = true;
+            }
+            continue;
+          }
         }
 
         const mesh = this.lodMeshes[targetBucket];
@@ -446,7 +426,7 @@ export class StonesManager {
         this.tmpMatrix.compose(inst.pos, this.tmpQuat, this.tmpScale);
         mesh.setMatrixAt(mesh.count, this.tmpMatrix);
         mesh.count++;
-        globalCount++;
+        placed++;
       }
     }
 

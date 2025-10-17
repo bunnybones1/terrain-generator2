@@ -79,6 +79,7 @@ export class TerrainRenderer {
     const uvs: number[] = [];
     const pines: number[] = [];
     const indices: number[] = [];
+    const useBaseForHighLod = t.lod < 1;
     for (let j = 0; j < res; j++) {
       for (let i = 0; i < res; i++) {
         const fx = i / (res - 1);
@@ -86,9 +87,9 @@ export class TerrainRenderer {
         const wx = x + fx * size;
         const wz = z + fz * size;
         const terrainSample = this.data.getSample(wx, wz);
-        const wy = terrainSample.height;
+        const wy = useBaseForHighLod ? terrainSample.baseHeight : terrainSample.height;
         verts.push(wx, wy, wz);
-        pines.push(terrainSample.pine ?? 0);
+        pines.push(useBaseForHighLod ? 0 : (terrainSample.pine ?? 0));
         // World-space UVs: 1.0 UV = 4 meters in world space
         uvs.push(wx / 4.0, wz / 4.0);
       }

@@ -19,6 +19,7 @@ import { TerrainQuadtree } from "./terrain/TerrainQuadtree";
 import { TerrainSampler } from "./terrain/TerrainSampler";
 import FirstPersonController from "./FirstPersonController";
 import { StonesManager } from "./worldObjects/StonesManager";
+import { TreeManager } from "./worldObjects/TreeManager";
 import Water from "./worldObjects/Water";
 import { uniformTime } from "./worldObjects/materials/globalUniforms/time";
 import CloudPlaneMaterial from "./worldObjects/materials/CloudPlaneMaterial";
@@ -231,6 +232,20 @@ const firstPersonController = new FirstPersonController(
 const digSpan = document.getElementById("dig-radius");
 if (digSpan) digSpan.textContent = `${firstPersonController.digRadius}`;
 
+// Trees systems: shoreline pines
+const treeLayers: TreeManager[] = [
+  new TreeManager("pines-L", scene, terrainSampler, terrainRenderer.getMaterial(), 2001, {
+    cellSize: 30,
+    density: 0.06,
+    baseHeight: 8,
+    baseRadius: 3,
+    lodCapacities: [200, 400, 800, 1200, 2400],
+    manageRadius: 100,
+    jitter: 0.95,
+    minScale: 0.2,
+    maxScale: 1.3,
+  }),
+];
 // Stones systems: five layers from large/sparse to small/dense
 const stonesLayers: StonesManager[] = [
   // Layer 0: very large, very sparse, see from far away
@@ -318,6 +333,9 @@ function loop() {
 
   const dirtyAABBs = terrainData.popDirtyAABBs();
   for (const layer of stonesLayers) {
+    layer.update(camera, dirtyAABBs);
+  }
+  for (const layer of treeLayers) {
     layer.update(camera, dirtyAABBs);
   }
 
