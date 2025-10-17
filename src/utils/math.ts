@@ -2,6 +2,11 @@ export function remapClamp(a: number, b: number, v: number): number {
   const t = (v - a) / (b - a);
   return Math.min(1, Math.max(0, t));
 }
+
+export function clamp01(v: number): number {
+  return Math.min(1, Math.max(0, v));
+}
+
 export function remap(a: number, b: number, v: number): number {
   return (v - a) / (b - a);
 }
@@ -34,4 +39,12 @@ export function hash2i(xi: number, zi: number, k: number, seed: number): number 
 
 export function rand01(xi: number, zi: number, k: number, seed: number): number {
   return hash2i(xi, zi, k, seed) / 4294967295;
+}
+
+export function unlerp(val: number, low: number, high: number) {
+  return (val - low) / (high - low);
+}
+
+export function inRange(val: number, low: number, high: number) {
+  return low < val && val < high;
 }

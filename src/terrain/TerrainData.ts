@@ -422,7 +422,7 @@ export class TerrainData {
     const ridgeNormalized = sum / Math.max(1e-6, ampSum); // ~0..1
 
     // Height-based factor: start erosion earlier and ramp faster for visibility
-    // Smooth step from 50 -> 350 meters
+    // Smooth step from 10 -> 500 meters
     const t = remapClamp(10, 500, baseHeight); // 0..1
     const heightFactor = t * t * (3 - 2 * t); // smoothstep
 
@@ -436,7 +436,7 @@ export class TerrainData {
     let height = baseHeight * (1 - erosion);
 
     // Add ridgeNormalized in deep regions: start at -10m, increase to max at -500m
-    // Depth factor uses smoothstep from -10 -> -500 (note decreasing values)
+    // Depth factor uses smoothstep from 0 -> -400 (note decreasing values)
     const depthT = remapClamp(0, -400, height); // 0 at -10, 1 at -500
     const depthFactor = depthT * depthT * (3 - 2 * depthT); // smoothstep
 

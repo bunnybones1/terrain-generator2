@@ -5,13 +5,13 @@ import {
   Scene,
   Vector3,
   WebGLRenderer,
-  HemisphereLight,
   Mesh,
   CircleGeometry,
   SphereGeometry,
   PMREMGenerator,
   DoubleSide,
   MeshBasicMaterial,
+  PlaneGeometry,
 } from "three";
 import { TerrainRenderer } from "./terrain/TerrainRenderer";
 import { TerrainData } from "./terrain/TerrainData";
@@ -26,6 +26,8 @@ import CloudPlaneMaterial from "./worldObjects/materials/CloudPlaneMaterial";
 import { getPlaneGeometry } from "./worldObjects/geometry/planeGeometry";
 import HemisphereAmbientMaterial from "./worldObjects/materials/HemisphereAmbientMaterial";
 import { getSphereGeometry } from "./worldObjects/geometry/sphereGeometry";
+import { ProbeManager } from "./lighting/ProbeManager";
+import { makeTerrainMaterial } from "./terrain/materials";
 
 // 3D area container
 const view3d = document.createElement("div");
@@ -59,7 +61,6 @@ const camera = new PerspectiveCamera(
 );
 camera.position.set(3, 2, 5);
 
-scene.add(new HemisphereLight(0xcceeff, 0x778877, 0.35));
 const dirLight = new DirectionalLight(0xffeebb, 1.5);
 dirLight.castShadow = true;
 
@@ -147,9 +148,33 @@ const terrainData = new TerrainData(
   },
   terrainSeed
 );
-const terrainRenderer = new TerrainRenderer(terrainData, scene, camera.position);
+
+const probeManager = new ProbeManager(scene, renderer, terrainData);
+
+// Debug: visualize probe atlas on a small plane attached to the camera
+const debugPlaneGeom = new PlaneGeometry(1, 1);
+const debugPlaneMat = new MeshBasicMaterial({
+  map: probeManager.getAtlasTexture(),
+  side: DoubleSide,
+});
+const debugPlane = new Mesh(debugPlaneGeom, debugPlaneMat);
+// Place it in front of the camera in camera-local space
+debugPlane.scale.set(0.9, 0.9, 0.9);
+debugPlane.position.set(0.6, -0.25, -1.2); // x-right, y-down, z-forward (negative z is in front of camera)
+debugPlane.frustumCulled = false;
+// Ensure it faces the camera (plane geometry faces +z by default; we need it to face -z)
+debugPlane.rotation.y = Math.PI; // flip to face camera
+debugPlane.updateMatrix();
+// camera.add(debugPlane);
+
+const terrainMat = makeTerrainMaterial(camera.position, probeManager);
+const terrainRenderer = new TerrainRenderer(terrainData, scene, terrainMat);
+
+// Indirect lighting probe manager
 const terrainSampler = new TerrainSampler(terrainData);
 const terrainQuadtree = new TerrainQuadtree(terrainData, terrainSampler);
+
+scene.add(camera);
 
 // Huge inverted half-sphere (faces point inward) that will follow camera X/Z
 const waterSphereGeom = new SphereGeometry(99000, 64, 16, 0, Math.PI * 2, Math.PI * 0.5, Math.PI);
@@ -177,7 +202,7 @@ normalAttr.needsUpdate = true;
 waterSphereGeom.computeBoundingSphere();
 waterSphereGeom.computeBoundingBox();
 
-const waterSphere = new Mesh(waterSphereGeom, terrainRenderer.getMaterial());
+const waterSphere = new Mesh(waterSphereGeom, terrainMat);
 waterSphere.name = "InvertedFollowSphere";
 waterSphere.frustumCulled = false;
 waterSphere.renderOrder = 10;
@@ -228,13 +253,15 @@ const firstPersonController = new FirstPersonController(
   terrainData
 );
 
+probeManager.initQueue(camera.position);
+
 // Initialize UI dig radius display
 const digSpan = document.getElementById("dig-radius");
 if (digSpan) digSpan.textContent = `${firstPersonController.digRadius}`;
 
 // Trees systems: shoreline pines
 const treeLayers: TreeManager[] = [
-  new TreeManager("pines-L", scene, terrainSampler, terrainRenderer.getMaterial(), 2001, {
+  new TreeManager("pines-L", scene, terrainSampler, terrainMat, 2001, {
     cellSize: 20,
     lodCapacities: [200, 400, 800, 1200, 2400],
     manageRadius: 100,
@@ -243,35 +270,35 @@ const treeLayers: TreeManager[] = [
 // Stones systems: five layers from large/sparse to small/dense
 const stonesLayers: StonesManager[] = [
   // Layer 0: very large, very sparse, see from far away
-  new StonesManager("stones-XL", scene, terrainSampler, terrainRenderer.getMaterial(), 1001, {
+  new StonesManager("stones-XL", scene, terrainSampler, terrainMat, 1001, {
     cellSize: 30,
     density: 0.00006, // ~0.06 per 1000 m^2
     stoneRadius: 8,
     lodCapacities: [10, 20, 30, 40, 50],
     manageRadius: 1000,
   }), // Layer 1: large, sparse
-  new StonesManager("stones-L", scene, terrainSampler, terrainRenderer.getMaterial(), 1002, {
+  new StonesManager("stones-L", scene, terrainSampler, terrainMat, 1002, {
     cellSize: 24,
     density: 0.0002,
     stoneRadius: 4,
     lodCapacities: [10, 20, 30, 40, 50],
     manageRadius: 600,
   }), // Layer 2: medium
-  new StonesManager("stones-M", scene, terrainSampler, terrainRenderer.getMaterial(), 1003, {
+  new StonesManager("stones-M", scene, terrainSampler, terrainMat, 1003, {
     cellSize: 18,
     density: 0.003,
     stoneRadius: 2,
     lodCapacities: [20, 40, 60, 80, 100],
     manageRadius: 400,
   }), // Layer 3: small
-  new StonesManager("stones-S", scene, terrainSampler, terrainRenderer.getMaterial(), 1004, {
+  new StonesManager("stones-S", scene, terrainSampler, terrainMat, 1004, {
     cellSize: 12,
     density: 0.03,
     stoneRadius: 1,
     lodCapacities: [40, 60, 80, 100, 200],
     manageRadius: 240,
   }), // Layer 4: very small, numerous, only near camera
-  new StonesManager("stones-XS", scene, terrainSampler, terrainRenderer.getMaterial(), 1005, {
+  new StonesManager("stones-XS", scene, terrainSampler, terrainMat, 1005, {
     cellSize: 8,
     density: 0.1,
     stoneRadius: 0.5,
@@ -284,6 +311,11 @@ const stonesLayers: StonesManager[] = [
 const prevCamPos = new Vector3().copy(camera.position);
 const camMove = new Vector3();
 scene.updateMatrix();
+
+setInterval(() => {
+  const span = document.getElementById("cam-height");
+  if (span) span.textContent = `${camera.position.y.toFixed(2)}`;
+}, 100);
 // Render loop
 function loop() {
   const now = performance.now();
@@ -293,10 +325,26 @@ function loop() {
 
   // Update first-person controller
   firstPersonController.update(dt);
+  // debugPlane.position.set(Math.random()*4-2,Math.random()*4-2,Math.random()*4-2); // x-right, y-down, z-forward (negative z is in front of camera)
+  camera.updateMatrixWorld();
+  debugPlane.updateMatrixWorld();
 
   // Update systems
   terrainQuadtree.update(camera);
+
+  // Update probes and push uniforms to terrain material
+  probeManager.update(camera.position);
+  // Propagate probe atlas to terrain material
+  terrainMat.userData = terrainMat.userData || {};
+  // attach references for onBeforeCompile hook to read
+  terrainMat.userData.probeAtlas = probeManager.getAtlasTexture();
+  terrainMat.userData.probeShared = probeManager.getSharedLayoutConfig();
+  // terrainMat.needsUpdate = true
+
   terrainRenderer.updateAndRender(camera, terrainQuadtree.getVisibleTiles());
+
+  // Update camera matrices so attached HUD elements render correctly
+  camera.updateMatrixWorld(true);
 
   // Make dirLight follow the camera
   {

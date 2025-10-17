@@ -1,15 +1,5 @@
-import {
-  BufferAttribute,
-  BufferGeometry,
-  Camera,
-  Color,
-  Mesh,
-  MeshStandardMaterial,
-  Scene,
-  Vector3,
-} from "three";
+import { BufferAttribute, BufferGeometry, Camera, Mesh, MeshStandardMaterial, Scene } from "three";
 import { TerrainData, TileCoords } from "./TerrainData";
-import { makeTerrainMaterial } from "./materials";
 
 type TileEntry = {
   mesh: Mesh;
@@ -22,7 +12,7 @@ export class TerrainRenderer {
   constructor(
     private data: TerrainData,
     private scene: Scene,
-    private cameraPosition: Vector3
+    private material: MeshStandardMaterial
   ) {}
 
   updateAndRender(camera: Camera, visible: TileCoords[]): void {
@@ -222,25 +212,9 @@ export class TerrainRenderer {
 
     // Slope can be derived from normals in shader; no need to store as attribute
 
-    const mesh = new Mesh(geo, this.getMaterial());
+    const mesh = new Mesh(geo, this.material);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     return mesh;
-  }
-  material: MeshStandardMaterial | undefined;
-  getMaterial() {
-    if (!this.material) {
-      this.material = makeTerrainMaterial(this.cameraPosition);
-    }
-    return this.material;
-  }
-  sunMaterial: MeshStandardMaterial | undefined;
-  getSunMaterial() {
-    if (!this.sunMaterial) {
-      this.sunMaterial = makeTerrainMaterial(this.cameraPosition);
-      this.sunMaterial.emissive = new Color(1, 1, 0.1);
-      this.sunMaterial.emissiveIntensity = 1000;
-    }
-    return this.sunMaterial;
   }
 }

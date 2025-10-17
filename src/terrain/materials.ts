@@ -1,7 +1,8 @@
 import { Vector2, MeshStandardMaterial, Color, Vector3, Vector4 } from "three";
 import { loadTex } from "./loadTex";
+import { ProbeManager } from "../lighting/ProbeManager";
 
-export function makeTerrainMaterial(cameraPosition: Vector3) {
+export function makeTerrainMaterial(cameraPosition: Vector3, probeManager: ProbeManager) {
   // Textures
   const grassTex = loadTex("textures/grass.png");
   const rockTex = loadTex("textures/rocks.png");
@@ -88,6 +89,11 @@ export function makeTerrainMaterial(cameraPosition: Vector3) {
       value: cameraPosition,
     };
 
+    shader.uniforms.uProbeAtlas = { value: probeManager.getAtlasTexture() };
+    shader.uniforms.uProbeShared = {
+      value: probeManager.getSharedLayoutConfig(),
+    };
+
     shader.vertexShader = shader.vertexShader
       .replace(
         "#include <common>",
@@ -157,6 +163,124 @@ export function makeTerrainMaterial(cameraPosition: Vector3) {
 
         uniform vec3 uAirFogColor;
         uniform float uAirFogDensity;
+
+        // Indirect lighting probes
+        uniform sampler2D uProbeAtlas;
+        // shared layout: [texelsPerProbe, probesPerAxis, probesPerLevel, texelsPerLevel, totalLevels, atlasSize, baseSpacing]
+        uniform float uProbeShared[7];
+
+        // Final world-space normal after normal map blending
+        vec3 finalWorldNormal;
+
+        // Compute spacing for a given level directly from shared config
+        float levelSpacing(int level) {
+          float baseSpacing = uProbeShared[6];
+          return baseSpacing * pow(2.0, float(level));
+        }
+
+        // Sample atlas at integer texel coordinates
+        vec3 sampleAtlas(vec2 px) {
+          float atlasSize = uProbeShared[5];
+          vec2 uv = (px + 0.5) / vec2(atlasSize);
+          return texture2D(uProbeAtlas, uv).rgb;
+        }
+
+        // Map a global 1D texel index into 2D pixel coords (row-major across full width)
+        vec2 texelIndexToPixel(int texelIndex) {
+          int aSize = int(uProbeShared[5]);
+          int x = texelIndex % aSize;
+          int y = texelIndex / aSize;
+          // Clamp to valid pixel range to avoid bleeding into adjacent rows/levels
+          x = clamp(x, 0, aSize - 1);
+          y = clamp(y, 0, aSize - 1);
+          return vec2(float(x), float(y));
+        }
+
+        // Fetch a single probe at 3D integer indices mapped into the 2D atlas using flat 1D packing
+        vec3 readProbeAtIndex3D(int ix, int iy, int iz, int level) {
+          int texelsPerProbe = int(uProbeShared[0]);
+          int probesPerAxis = int(uProbeShared[1]);
+          int texelsPerLevel = int(uProbeShared[3]);
+
+          // Correct flatten: iy*(N*N) + iz*N + ix
+          int N = probesPerAxis;
+          int flatIndexInLevel = (iy * N * N) + (iz * N) + ix;
+
+          // Convert to global 1D texel start index using per-level base offset
+          int baseTexel = texelsPerLevel * level;
+          int texelIndexStart = baseTexel + flatIndexInLevel * texelsPerProbe;
+
+          // Sample the first texel of the probe (RGB packed irradiance)
+          vec2 p = texelIndexToPixel(texelIndexStart);
+          return sampleAtlas(p);
+        }
+
+        // Trilinear sampling with wrapping ring-buffer indices
+        vec3 sampleProbeLevel3D(vec3 worldPos, int level) {
+          float totalLevels = uProbeShared[4];
+          if (level >= int(totalLevels)) return vec3(0.0);
+
+          int probesPerAxis = int(uProbeShared[1]);
+
+          float spacing = levelSpacing(level);
+          float invSpacing = 1.0 / max(spacing, 1e-6);
+
+          // world to cell coordinates
+          float fx = floor(worldPos.x * invSpacing);
+          float fy = floor(worldPos.y * invSpacing);
+          float fz = floor(worldPos.z * invSpacing);
+
+          float tx = fract(worldPos.x * invSpacing);
+          float ty = fract(worldPos.y * invSpacing);
+          float tz = fract(worldPos.z * invSpacing);
+
+          int ix0 = int(mod(fx, float(probesPerAxis))); if (ix0 < 0) ix0 += probesPerAxis;
+          int iy0 = int(mod(fy, float(probesPerAxis))); if (iy0 < 0) iy0 += probesPerAxis;
+          int iz0 = int(mod(fz, float(probesPerAxis))); if (iz0 < 0) iz0 += probesPerAxis;
+
+          int ix1 = (ix0 + 1) % probesPerAxis;
+          int iy1 = (iy0 + 1) % probesPerAxis;
+          int iz1 = (iz0 + 1) % probesPerAxis;
+
+          // sample 8 neighbors
+          vec3 c000 = readProbeAtIndex3D(ix0, iy0, iz0, level);
+          vec3 c100 = readProbeAtIndex3D(ix1, iy0, iz0, level);
+          vec3 c010 = readProbeAtIndex3D(ix0, iy1, iz0, level);
+          vec3 c110 = readProbeAtIndex3D(ix1, iy1, iz0, level);
+          vec3 c001 = readProbeAtIndex3D(ix0, iy0, iz1, level);
+          vec3 c101 = readProbeAtIndex3D(ix1, iy0, iz1, level);
+          vec3 c011 = readProbeAtIndex3D(ix0, iy1, iz1, level);
+          vec3 c111 = readProbeAtIndex3D(ix1, iy1, iz1, level);
+
+          // trilinear blend
+          vec3 c00 = mix(c000, c100, tx);
+          vec3 c01 = mix(c001, c101, tx);
+          vec3 c10 = mix(c010, c110, tx);
+          vec3 c11 = mix(c011, c111, tx);
+
+          vec3 c0 = mix(c00, c10, ty);
+          vec3 c1 = mix(c01, c11, ty);
+
+          return mix(c0, c1, tz);
+        }
+
+        vec3 sampleIndirectIrradiance(vec3 worldPos) {
+          float dist = length(worldPos - cameraPosition);
+          // Compute level from distance using powers of two thresholds starting at 16m
+          float baseEdge = 16.0;
+          float totalLevels = uProbeShared[4];
+          float lod = clamp(log2(max(dist, 1e-6) / baseEdge), 0.0, totalLevels - 1.0);
+          float lvl0F = floor(lod);
+          int lvl0 = int(lvl0F);
+          int lvl1 = min(lvl0 + 1, int(totalLevels) - 1);
+          float t = clamp(lod - lvl0F, 0.0, 1.0);
+          // Optional smoothing to reduce banding
+          // t = t * t * (3.0 - 2.0 * t);
+
+          vec3 a = sampleProbeLevel3D(worldPos, lvl0);
+          vec3 b = sampleProbeLevel3D(worldPos, lvl1);
+          return mix(a, b, t);
+        }
 
         varying float vHeight;
         varying vec3 vWorldPos;
@@ -331,6 +455,7 @@ export function makeTerrainMaterial(cameraPosition: Vector3) {
             normal = normal * faceDirection;
           #endif
           normal = normalize( normalMatrix * normal );
+          finalWorldNormal = normal;
         #elif defined( USE_NORMALMAP_TANGENTSPACE )
           vec3 baseTangentNormal = vec3(0.0, 0.0, 1.0);
           #ifdef USE_NORMALMAP
@@ -353,10 +478,38 @@ export function makeTerrainMaterial(cameraPosition: Vector3) {
 
           vec3 mapN = blendedTangentNormal;
           normal = normalize( tbn * mapN );
+          finalWorldNormal = normal;
         #elif defined( USE_BUMPMAP )
           normal = perturbNormalArb( - vViewPosition, normal, dHdxy_fwd(), faceDirection );
+          finalWorldNormal = normal;
         #endif`
       )
+      .replace(
+        `#include <lights_fragment_begin>`,
+        `
+        #include <lights_fragment_begin>
+        
+        // Indirect lighting from probe atlas
+        // vec3 probePos = vWorldPos;
+        // vec3 probePos = vWorldPos + normal * 4.0;
+        vec3 probePos = vWorldPos + (vWorldNormal + mapN) * 4.0;
+        vec3 irr = sampleIndirectIrradiance(probePos);
+        irradiance += irr;
+        `
+      )
+      // .replace(
+      //   `#include <lights_fragment_end>`,
+      //   `
+      //   #include <lights_fragment_end>
+
+      //   // Indirect lighting from probe atlas
+      //   // vec3 probePos = vWorldPos;
+      //   vec3 probePos = vWorldPos + (vWorldNormal + mapN) * 4.0;
+      //   vec3 irr = sampleIndirectIrradiance(probePos);
+      //   irradiance += irr;
+      //   // reflectedLight.indirectDiffuse += irr;
+      //   `
+      // )
       .replace(
         "#include <fog_fragment>",
         `
@@ -461,6 +614,12 @@ export function makeTerrainMaterial(cameraPosition: Vector3) {
           gl_FragColor.rgb *= transmittance;
           gl_FragColor.rgb += inScattering;
         }
+          // gl_FragColor.rgb = tbn * 0.5 + 0.5;
+          // gl_FragColor.rgb = (tbn * vWorldNormal) * 0.5 + 0.5;
+          // gl_FragColor.rgb = (vWorldNormal + mapN) * 0.5 + 0.5;
+          // gl_FragColor.rgb = mapN * 0.5 + 0.5;
+
+          // normal = normalize( tbn * mapN );
         `
       );
   };

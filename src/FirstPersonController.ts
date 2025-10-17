@@ -123,7 +123,7 @@ export default class FirstPersonController {
     camera.position.z = spawn.z;
     // Initialize yaw so camera faces the sea from spawn
     // Our convention: yaw rotates around Y, forward vector is (0,0,-1) at yaw=0; to face (dx,dz), yaw = atan2(dx, -dz)
-    this.yaw = spawn.angle;
+    this.yaw = spawn.angle + Math.PI * 0.5;
     // height should be very close to 0; use sampler for consistency and add a small offset
     const groundH0 = terrainSampler.getSample(spawn.x, spawn.z).baseHeight + initialHeight;
     camera.position.y = Math.max(0, groundH0) + this.eyeHeight + 0.5;
