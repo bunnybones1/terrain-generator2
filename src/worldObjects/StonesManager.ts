@@ -14,6 +14,7 @@ import {
 import { TerrainSampler } from "../terrain/TerrainSampler";
 import { PRNG } from "../utils/PRNG";
 import { buildStoneLODGeometries } from "./geometry/stone";
+import { DirtyAABB } from "../terrain/TerrainData";
 
 export interface StonesManagerConfig {
   cellSize: number;
@@ -45,6 +46,7 @@ type CellMeta = {
   maxY: number;
 };
 
+const STONE_ON_GROUND_OFFSET = 0;
 export class StonesManager {
   private rng: PRNG;
   // Virtualization parameters
@@ -180,11 +182,11 @@ export class StonesManager {
 
     // Sample terrain heights at corners and center once
     const ySamples = [
-      this.terrain.getHeight(minX, minZ).height,
-      this.terrain.getHeight(maxX, minZ).height,
-      this.terrain.getHeight(minX, maxZ).height,
-      this.terrain.getHeight(maxX, maxZ).height,
-      this.terrain.getHeight((minX + maxX) * 0.5, (minZ + maxZ) * 0.5).height,
+      this.terrain.getSample(minX, minZ).baseHeight,
+      this.terrain.getSample(maxX, minZ).baseHeight,
+      this.terrain.getSample(minX, maxZ).baseHeight,
+      this.terrain.getSample(maxX, maxZ).baseHeight,
+      this.terrain.getSample((minX + maxX) * 0.5, (minZ + maxZ) * 0.5).baseHeight,
     ];
     const minY = Math.min(...ySamples) - this.maxScale - 1;
     const maxY = Math.max(...ySamples) + this.maxScale + 1;
@@ -224,7 +226,7 @@ export class StonesManager {
       const x = (cx + 0.5 + rx) * cs;
       const z = (cz + 0.5 + rz) * cs;
 
-      const y = this.terrain.getHeight(x, z).baseHeight;
+      const y = this.terrain.getSample(x, z).baseHeight;
       const slope = this.terrain.getSlope(x, z);
       if (y > 0 && slope < 0.5) continue;
 
@@ -232,7 +234,7 @@ export class StonesManager {
       const s01 = this.rand01(cx, cz, 4 + i * 3);
       const scale = this.minScale + (this.maxScale - this.minScale) * s01;
 
-      stones.push({ pos: new Vector3(x, y - 0.25, z), rotY, scale });
+      stones.push({ pos: new Vector3(x, y + STONE_ON_GROUND_OFFSET, z), rotY, scale });
     }
 
     return { cx, cz, stones };
@@ -317,8 +319,67 @@ export class StonesManager {
   }
 
   // Fill meshes based on cached cells around camera each frame
-  update(camera: PerspectiveCamera) {
+  update(camera: PerspectiveCamera, dirtyAABBs?: DirtyAABB[]) {
+    // Maintain cell cache around camera
     this.ensureCellsAround(camera);
+
+    // If there are dirty AABBs, update stones in any cells that overlap with the AABBs
+    if (dirtyAABBs && dirtyAABBs.length > 0) {
+      const cs = this.cellSize;
+      const eps = 0.5; // expand bounds to catch edge stones and FP issues
+
+      for (const raw of dirtyAABBs) {
+        const aabb = {
+          minX: raw.minX - eps,
+          minZ: raw.minZ - eps,
+          maxX: raw.maxX + eps,
+          maxZ: raw.maxZ + eps,
+        };
+
+        // Determine overlapped cell range using expanded bounds
+        const minCx = Math.floor(aabb.minX / cs);
+        const maxCx = Math.floor(aabb.maxX / cs);
+        const minCz = Math.floor(aabb.minZ / cs);
+        const maxCz = Math.floor(aabb.maxZ / cs);
+
+        for (let cz = minCz; cz <= maxCz; cz++) {
+          for (let cx = minCx; cx <= maxCx; cx++) {
+            const k = this.key(cx, cz);
+            const cell = this.cells.get(k);
+            if (!cell) continue;
+
+            // Robust: update all stones in overlapped cells (fast and safe),
+            // alternatively keep an inclusion test with tolerance if desired.
+            for (const inst of cell.stones) {
+              const x = inst.pos.x;
+              const z = inst.pos.z;
+              // If you wish to restrict to AABB, keep this tolerant check:
+              // if (x < aabb.minX || x > aabb.maxX || z < aabb.minZ || z > aabb.maxZ) continue;
+
+              const sample = this.terrain.getSample(x, z);
+              inst.pos.y = sample.baseHeight + STONE_ON_GROUND_OFFSET;
+            }
+
+            // Recompute cell meta min/max Y from fresh terrain samples to keep culling correct
+            // Sample terrain at corners and center to rebuild conservative vertical bounds
+            const minX = cx * cs;
+            const minZ = cz * cs;
+            const maxX = (cx + 1) * cs;
+            const maxZ = (cz + 1) * cs;
+            const ySamples = [
+              this.terrain.getSample(minX, minZ).baseHeight,
+              this.terrain.getSample(maxX, minZ).baseHeight,
+              this.terrain.getSample(minX, maxZ).baseHeight,
+              this.terrain.getSample(maxX, maxZ).baseHeight,
+              this.terrain.getSample((minX + maxX) * 0.5, (minZ + maxZ) * 0.5).baseHeight,
+            ];
+            const meta = this.getOrCreateMeta(cx, cz);
+            meta.minY = Math.min(...ySamples) - this.maxScale - 1;
+            meta.maxY = Math.max(...ySamples) + this.maxScale + 1;
+          }
+        }
+      }
+    }
 
     // Reset counts
     this.lodMeshes.forEach((m) => (m.count = 0));

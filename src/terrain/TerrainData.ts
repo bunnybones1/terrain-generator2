@@ -44,7 +44,10 @@ const results = { height: 0, baseHeight: 0, pine: 0, pineWindow: 0 };
 
 const results3 = [0, 0, 0] as [number, number, number];
 
+// 4 m grid cache sizes
 const cacheGridSize = 4;
+
+export type DirtyAABB = { minX: number; minZ: number; maxX: number; maxZ: number };
 
 export class TerrainData {
   readonly config: TerrainConfig;
@@ -52,25 +55,81 @@ export class TerrainData {
   private maskSimplex: NoiseFunction2D;
   private rng: PRNG;
 
-  // 4 m grid cache for base heights
   private readonly baseHeightGridSize = cacheGridSize; // meters
-  private baseHeightCache = new Map<string, number>();
+  private readonly slopeGridSize = cacheGridSize; // meters
 
-  private baseHeightCacheKey(ix: number, iz: number): string {
-    return `${ix}:${iz}`;
+  // Paged cache configuration
+  private static readonly PAGE_POT = 7; // 128x128 samples per page
+  private static readonly PAGE_SIZE = 1 << TerrainData.PAGE_POT; // 128
+  private static readonly PAGE_MASK = TerrainData.PAGE_SIZE - 1;
+
+  private static packPageKey(px: number, pz: number): number {
+    // pack signed 20-bit coords into a single number key
+    const BITS = 20;
+    const MASK = (1 << BITS) - 1;
+    const X = (px & MASK) >>> 0;
+    const Z = (pz & MASK) >>> 0;
+    return X + Z * (MASK + 1);
   }
 
-  // 4 m grid cache for slopes
-  private readonly slopeGridSize = cacheGridSize; // meters
-  private slopeCache = new Map<string, number>();
-  private slopeCacheKey(ix: number, iz: number): string {
-    return `${ix}:${iz}`;
+  private static pageIndex(lx: number, lz: number): number {
+    return lz * TerrainData.PAGE_SIZE + lx;
+  }
+
+  private static makePage(): Float32Array {
+    const arr = new Float32Array(TerrainData.PAGE_SIZE * TerrainData.PAGE_SIZE);
+    // fill with NaN to detect missing values
+    for (let i = 0; i < arr.length; i++) arr[i] = Number.NaN;
+    return arr;
+  }
+
+  // Page maps
+  private baseHeightPages = new Map<number, Float32Array>();
+  private slopePages = new Map<number, Float32Array>();
+
+  // Retrieve or create page for given page coords
+  private getPage(map: Map<number, Float32Array>, px: number, pz: number): Float32Array {
+    const key = TerrainData.packPageKey(px, pz);
+    let page = map.get(key);
+    if (!page) {
+      page = TerrainData.makePage();
+      map.set(key, page);
+    }
+    return page;
+  }
+
+  // Generic paged sample getter for grid coords (ix,iz)
+  private getPagedSample(
+    map: Map<number, Float32Array>,
+    ix: number,
+    iz: number,
+    gridSize: number,
+    compute: (wx: number, wz: number) => number
+  ): number {
+    // Compute page and local indices
+    const px = ix >> TerrainData.PAGE_POT;
+    const pz = iz >> TerrainData.PAGE_POT;
+    const lx = ix & TerrainData.PAGE_MASK;
+    const lz = iz & TerrainData.PAGE_MASK;
+
+    const page = this.getPage(map, px, pz);
+    const idx = TerrainData.pageIndex(lx, lz);
+    let v = page[idx];
+    if (Number.isNaN(v)) {
+      const wx = ix * gridSize;
+      const wz = iz * gridSize;
+      v = compute(wx, wz);
+      page[idx] = v;
+    }
+    return v;
   }
 
   // Dig layers at 0.5m doubling 6 times: 0.5,1,2,4,8,16,32
   private digLayers: DigLayer[] = [];
   // track dirty tiles affected by edits to trigger regeneration outside
   private dirtyTiles = new Set<string>();
+  // world-space AABBs of modified areas to allow precise updates (e.g., reposition stones)
+  private dirtyAABBs: DirtyAABB[] = [];
 
   constructor(config: TerrainConfig, seed = 1337) {
     void seed;
@@ -196,6 +255,14 @@ export class TerrainData {
   }
 
   private markDirtyTilesForSphere(cx: number, cz: number, radius: number) {
+    // record precise world-space bounds for systems like stones to react
+    this.dirtyAABBs.push({
+      minX: cx - radius,
+      minZ: cz - radius,
+      maxX: cx + radius,
+      maxZ: cz + radius,
+    });
+
     // Check all LODs because renderer may be showing any
     for (let lod = this.config.minLOD; lod <= this.config.maxLOD; lod++) {
       const size = this.config.tileSize * Math.pow(2, lod);
@@ -218,35 +285,31 @@ export class TerrainData {
     return arr;
   }
 
-  // Get or compute base height at a grid point (ix,iz) in the 4m cache
-  private getBaseHeightGridSample(ix: number, iz: number): number {
-    const key = this.baseHeightCacheKey(ix, iz);
-    const hit = this.baseHeightCache.get(key);
-    if (hit !== undefined) return hit;
-
-    const s = this.baseHeightGridSize;
-    const wx = ix * s;
-    const wz = iz * s;
-    const h = this.getBaseHeight(wx, wz);
-    this.baseHeightCache.set(key, h);
-    return h;
+  // Consume and clear dirty AABBs
+  popDirtyAABBs() {
+    if (this.dirtyAABBs.length === 0) {
+      return;
+    }
+    const arr = this.dirtyAABBs.slice();
+    this.dirtyAABBs.length = 0;
+    return arr;
   }
 
-  // Get or compute slope at a grid point (ix,iz) in the 4m cache
-  private getSlopeGridSample(ix: number, iz: number): number {
-    const key = this.slopeCacheKey(ix, iz);
-    const hit = this.slopeCache.get(key);
-    if (hit !== undefined) return hit;
+  // Get or compute base height at a grid point (ix,iz) using paged cache
+  private getBaseHeightGridSample(ix: number, iz: number): number {
+    return this.getPagedSample(this.baseHeightPages, ix, iz, this.baseHeightGridSize, (wx, wz) =>
+      this.getBaseHeight(wx, wz)
+    );
+  }
 
-    const s = this.slopeGridSize;
-    const wx = ix * s;
-    const wz = iz * s;
-    // Compute slope from approximated normal (cheap and smooth)
-    const n = this.getNormalApprox(wx, wz);
-    const ny = n[1];
-    const slope = Math.sqrt(Math.max(0, 1 - ny * ny)); // 0..1
-    this.slopeCache.set(key, slope);
-    return slope;
+  // Get or compute slope at a grid point (ix,iz) using paged cache
+  private getSlopeGridSample(ix: number, iz: number): number {
+    return this.getPagedSample(this.slopePages, ix, iz, this.slopeGridSize, (wx, wz) => {
+      // Compute slope from approximated normal for stability
+      const n = this.getNormalApprox(wx, wz);
+      const ny = n[1];
+      return Math.sqrt(Math.max(0, 1 - ny * ny)); // 0..1
+    });
   }
 
   getBaseHeightApprox(x: number, z: number) {

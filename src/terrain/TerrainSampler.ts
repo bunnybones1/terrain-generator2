@@ -3,7 +3,7 @@ import { TerrainData } from "./TerrainData";
 export class TerrainSampler {
   constructor(public data: TerrainData) {}
 
-  getHeight(x: number, z: number) {
+  getSample(x: number, z: number) {
     return this.data.getSample(x, z);
   }
 
@@ -34,7 +34,7 @@ export class TerrainSampler {
       const x = origin.x + dir.x * t;
       const z = origin.z + dir.z * t;
       const y = origin.y + dir.y * t;
-      const h = this.getHeight(x, z).height;
+      const h = this.getSample(x, z).height;
       if (y <= h) {
         return { hit: true, point: { x, y: h, z } };
       }

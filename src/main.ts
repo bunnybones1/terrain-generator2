@@ -316,8 +316,9 @@ function loop() {
   // Optionally also follow Y if desired:
   // skySphere.position.y = camera.position.y;
 
+  const dirtyAABBs = terrainData.popDirtyAABBs();
   for (const layer of stonesLayers) {
-    layer.update(camera);
+    layer.update(camera, dirtyAABBs);
   }
 
   // Recycle tiny sphere instances when they move beyond spawnRadius
