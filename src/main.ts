@@ -235,15 +235,9 @@ if (digSpan) digSpan.textContent = `${firstPersonController.digRadius}`;
 // Trees systems: shoreline pines
 const treeLayers: TreeManager[] = [
   new TreeManager("pines-L", scene, terrainSampler, terrainRenderer.getMaterial(), 2001, {
-    cellSize: 30,
-    density: 0.06,
-    baseHeight: 8,
-    baseRadius: 3,
+    cellSize: 20,
     lodCapacities: [200, 400, 800, 1200, 2400],
     manageRadius: 100,
-    jitter: 0.95,
-    minScale: 0.2,
-    maxScale: 1.3,
   }),
 ];
 // Stones systems: five layers from large/sparse to small/dense

@@ -91,11 +91,13 @@ function distortAlongNormalWithRidge(
     }
     const fbm = ampSum > 0 ? sum / ampSum : 0;
 
-    const nx = nAttr.getX(i);
-    const ny = nAttr.getY(i);
-    const nz = nAttr.getZ(i);
+    const xzLen = Math.hypot(x, z) * 0.5;
 
-    const push = amplitude * fbm;
+    const nx = nAttr.getX(i) * xzLen;
+    const ny = nAttr.getY(i) * xzLen;
+    const nz = nAttr.getZ(i) * xzLen;
+
+    const push = amplitude * (fbm - 0.5);
     pos.setXYZ(i, x + nx * push, y + ny * push, z + nz * push);
   }
   pos.needsUpdate = true;
@@ -115,7 +117,6 @@ export function buildPineLODGeometries(
   for (let i = 0; i < levels; i++) {
     // progressively coarser with fewer foliage sections
     const segs = Math.max(6, 16 - i * 3);
-    const foliageSections = Math.max(1, 3 - Math.floor(i / 2));
     const trunkRadius = Math.max(0.05, baseRadius * 0.15);
     const trunkHeight = baseHeight * 0.4;
     const foliageHeight = baseHeight - trunkHeight;
@@ -139,48 +140,46 @@ export function buildPineLODGeometries(
     // Foliage: stack cones
     const foliageParts: BufferGeometry[] = [];
     let accumulated = trunkHeight;
-    for (let f = 0; f < foliageSections; f++) {
-      const sectionHeight = foliageHeight / foliageSections;
-      const top = accumulated + sectionHeight;
-      const baseR = baseRadius * (1 - f * 0.25);
-      const icoSphere = new IcosahedronGeometry(baseR, segs);
+    const sectionHeight = foliageHeight;
+    const top = accumulated + sectionHeight;
+    const baseR = baseRadius;
+    const icoSphere = new IcosahedronGeometry(baseR, segs);
 
-      //recalculate UVs for icosphere before merging to prevent seams
-      const cPos = icoSphere.getAttribute("position");
+    //recalculate UVs for icosphere before merging to prevent seams
+    const cPos = icoSphere.getAttribute("position");
+    const cuvs = new Float32Array(cPos.count * 2);
+    for (let vi = 0; vi < cPos.count; vi++) {
+      cuvs[vi * 2 + 0] = cPos.getX(vi) * 0.1;
+      cuvs[vi * 2 + 1] = cPos.getZ(vi) * 0.1;
+    }
+    icoSphere.setAttribute("uv", new BufferAttribute(cuvs, 2));
+
+    const cone = BufferGeometryUtils.mergeVertices(icoSphere, 0.01);
+    // Remap spherical vertices into a cone of given height and base radius
+    sphereToCone(cone, sectionHeight, baseR);
+    // Add organic irregularity to foliage by pushing along normals using ridge fbm
+    // amplitude scaled by local radius/height to keep proportions across LODs
+    const amp = Math.max(0.02, baseR * 0.5) * 10;
+    const freq = (0.4 / Math.max(0.5, baseR)) * 4;
+    distortAlongNormalWithRidge(cone, simplex, amp, freq, 4, 2.1, 0.55);
+
+    const cMat = new Matrix4().makeTranslation(0, accumulated + sectionHeight * 0.5, 0);
+    cone.applyMatrix4(cMat);
+
+    // UVs for cone from x,z scaled (tiling)
+    {
+      const cPos = cone.getAttribute("position");
       const cuvs = new Float32Array(cPos.count * 2);
       for (let vi = 0; vi < cPos.count; vi++) {
-        cuvs[vi * 2 + 0] = cPos.getX(vi) * 0.1;
-        cuvs[vi * 2 + 1] = cPos.getZ(vi) * 0.1;
+        cuvs[vi * 2 + 0] = cPos.getX(vi);
+        cuvs[vi * 2 + 1] = cPos.getZ(vi);
       }
-      icoSphere.setAttribute("uv", new BufferAttribute(cuvs, 2));
-
-      const cone = BufferGeometryUtils.mergeVertices(icoSphere, 0.01);
-      // Remap spherical vertices into a cone of given height and base radius
-      sphereToCone(cone, sectionHeight, baseR);
-      // Add organic irregularity to foliage by pushing along normals using ridge fbm
-      // amplitude scaled by local radius/height to keep proportions across LODs
-      const amp = Math.max(0.02, baseR * 0.15);
-      const freq = 0.4 / Math.max(0.5, baseR);
-      distortAlongNormalWithRidge(cone, simplex, amp, freq, 4, 2.1, 0.55);
-
-      const cMat = new Matrix4().makeTranslation(0, accumulated + sectionHeight * 0.5, 0);
-      cone.applyMatrix4(cMat);
-
-      // UVs for cone from x,z scaled (tiling)
-      {
-        const cPos = cone.getAttribute("position");
-        const cuvs = new Float32Array(cPos.count * 2);
-        for (let vi = 0; vi < cPos.count; vi++) {
-          cuvs[vi * 2 + 0] = cPos.getX(vi) * 0.1;
-          cuvs[vi * 2 + 1] = cPos.getZ(vi) * 0.1;
-        }
-        cone.setAttribute("uv", new BufferAttribute(cuvs, 2));
-      }
-
-      foliageParts.push(cone);
-
-      accumulated = top;
+      cone.setAttribute("uv", new BufferAttribute(cuvs, 2));
     }
+
+    foliageParts.push(cone);
+
+    accumulated = top;
 
     // Build 'pine' attribute arrays matching each sub-geometry before merge
     const pineAttrs: BufferAttribute[] = [];

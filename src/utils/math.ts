@@ -23,3 +23,15 @@ export function hash2(i: number, j: number) {
 export function ridge(n: number): number {
   return (1 - Math.abs(n)) * (1 - Math.abs(n));
 }
+
+export function hash2i(xi: number, zi: number, k: number, seed: number): number {
+  let h = xi * 374761393 + zi * 668265263 + (seed ^ (k * 1274126177));
+  h = (h ^ (h >>> 13)) | 0;
+  h = Math.imul(h, 1274126177);
+  h = (h ^ (h >>> 16)) >>> 0;
+  return h;
+}
+
+export function rand01(xi: number, zi: number, k: number, seed: number): number {
+  return hash2i(xi, zi, k, seed) / 4294967295;
+}

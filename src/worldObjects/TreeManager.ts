@@ -16,17 +16,12 @@ import { TerrainSampler } from "../terrain/TerrainSampler";
 import { PRNG } from "../utils/PRNG";
 import { DirtyAABB } from "../terrain/TerrainData";
 import { buildPineLODGeometries } from "./geometry/pine";
+import { hash2, rand01 } from "../utils/math";
 
 export interface TreeManagerConfig {
   cellSize: number;
-  density: number;
-  baseHeight: number;
-  baseRadius: number;
   lodCapacities: number[];
   manageRadius: number;
-  jitter?: number;
-  minScale?: number;
-  maxScale?: number;
 }
 
 type TreeInstance = {
@@ -69,12 +64,6 @@ export class TreeManager {
   private tmpScale = new Vector3();
 
   private cellSize: number;
-  private density: number;
-  private jitter: number;
-  private minScale: number;
-  private maxScale: number;
-  private baseHeight: number;
-  private baseRadius: number;
   private manageRadius: number;
   private dropRadius: number;
 
@@ -91,12 +80,6 @@ export class TreeManager {
 
     // Apply configuration
     this.cellSize = config.cellSize;
-    this.density = config.density;
-    this.baseHeight = config.baseHeight;
-    this.baseRadius = config.baseRadius;
-    this.jitter = config.jitter ?? 0.95;
-    this.minScale = config.minScale ?? 0.7;
-    this.maxScale = config.maxScale ?? 1.4;
 
     this.manageRadius = Math.ceil(config.manageRadius / this.cellSize);
     this.dropRadius = Math.ceil(this.manageRadius * 1.2);
@@ -108,7 +91,7 @@ export class TreeManager {
       this.lodDistances.push(maxLodDistance / Math.pow(2, this.lodCapacities.length - 1 - i));
     }
 
-    this.lodGeoms = buildPineLODGeometries(this.baseHeight, this.baseRadius, this.rng);
+    this.lodGeoms = buildPineLODGeometries(1, 0.25, this.rng);
 
     this.material.flatShading = false;
     this.material.needsUpdate = true;
@@ -146,16 +129,6 @@ export class TreeManager {
     });
   }
 
-  private hash2i(xi: number, zi: number, k: number): number {
-    let h = xi * 374761393 + zi * 668265263 + (this.seed ^ (k * 1274126177));
-    h = (h ^ (h >>> 13)) | 0;
-    h = Math.imul(h, 1274126177);
-    h = (h ^ (h >>> 16)) >>> 0;
-    return h;
-  }
-  private rand01(xi: number, zi: number, k: number): number {
-    return this.hash2i(xi, zi, k) / 4294967295;
-  }
   private key(cx: number, cz: number): string {
     return `${cx},${cz}`;
   }
@@ -178,8 +151,8 @@ export class TreeManager {
       this.terrain.getSample(maxX, maxZ).baseHeight,
       this.terrain.getSample((minX + maxX) * 0.5, (minZ + maxZ) * 0.5).baseHeight,
     ];
-    const minY = Math.min(...ySamples) - this.maxScale * this.baseHeight - 1;
-    const maxY = Math.max(...ySamples) + this.maxScale * this.baseHeight + 1;
+    const minY = Math.min(...ySamples) - 1;
+    const maxY = Math.max(...ySamples) + 1;
 
     const meta: CellMeta = {
       cx,
@@ -197,42 +170,47 @@ export class TreeManager {
     const cs = this.cellSize;
     const trees: TreeInstance[] = [];
 
-    const cellArea = cs * cs;
-    const expectedPerCell = this.density * cellArea;
-    // Convert expectedPerCell to an integer count:
-    // - Spawn floor(expectedPerCell) guaranteed
-    // - Plus one extra with probability equal to the fractional part
-    const base = Math.floor(expectedPerCell);
-    const frac = expectedPerCell - base;
-    let count = base;
-    if (frac > 0 && this.rand01(cx + 17, cz - 23, 0) < frac) count++;
-    for (let i = 0; i < count; i++) {
-      const rx = (this.rand01(cx, cz, 1 + i * 5) * 2 - 1) * this.jitter;
-      const rz = (this.rand01(cx, cz, 2 + i * 5) * 2 - 1) * this.jitter;
-      const x = (cx + 0.5 + rx) * cs;
-      const z = (cz + 0.5 + rz) * cs;
+    // Worley-like distribution: fixed feature per 4m cell (at most one tree)
+    const worleyCellSize = 4;
+    const worldMinX = cx * cs;
+    const worldMinZ = cz * cs;
+    const worldMaxX = (cx + 1) * cs;
+    const worldMaxZ = (cz + 1) * cs;
 
-      const sample = this.terrain.getSample(x, z);
-      const y = sample.baseHeight;
-      const pineWindow = sample.pineWindow;
-      if (pineWindow <= 0) continue;
+    // Determine the range of worley cells overlapping this world cell
+    const minWx = Math.floor(worldMinX / worleyCellSize);
+    const minWz = Math.floor(worldMinZ / worleyCellSize);
+    const maxWx = Math.floor((worldMaxX - 1e-6) / worleyCellSize);
+    const maxWz = Math.floor((worldMaxZ - 1e-6) / worleyCellSize);
 
-      // Tree yaw around Y mostly; small tilt X/Z for natural feel
-      const yaw = this.rand01(cx, cz, 3 + i * 5) * Math.PI * 2;
-      const tiltX = (this.rand01(cx, cz, 4 + i * 5) * 2 - 1) * 0.06;
-      const tiltZ = (this.rand01(cx, cz, 5 + i * 5) * 2 - 1) * 0.06;
-      const quat = new Quaternion().setFromEuler(tmpEuler.set(tiltX, yaw, tiltZ));
+    for (let wz = minWz; wz <= maxWz; wz++) {
+      for (let wx = minWx; wx <= maxWx; wx++) {
+        const [jx, jz] = hash2(wx, wz); // jx,jz expected in [0,1)
+        // Convert Worley cell index to world meters and place feature within the cell with jitter
+        const fx = wx * worleyCellSize + (0.5 + (jx - 0.5)) * worleyCellSize; // center + jitter in [-0.5..0.5) * size
+        const fz = wz * worleyCellSize + (0.5 + (jz - 0.5)) * worleyCellSize;
 
-      // Scale influenced by pineWindow; add small per-instance variance
-      const variance = this.rand01(cx, cz, 6 + i * 5) * 0.2 - 0.1; // -0.1..0.1
-      const s01 = Math.min(1, Math.max(0, pineWindow + variance));
-      const scale = this.minScale + (this.maxScale - this.minScale) * s01;
+        // Only place if the feature falls within this world cell bounds
+        if (fx < worldMinX || fx >= worldMaxX || fz < worldMinZ || fz >= worldMaxZ) continue;
 
-      trees.push({
-        pos: new Vector3(x, y, z),
-        rot: quat,
-        scale,
-      });
+        const sample = this.terrain.getSample(fx, fz);
+        const y = sample.baseHeight;
+        const pineWindow = sample.pineWindow;
+        const pine = sample.pine;
+        if (pineWindow <= 0 || pine < 1) continue;
+
+        // Orientation with slight tilt
+        const yaw = rand01(wx, wz, 14, this.seed) * Math.PI * 2;
+        const tiltX = (rand01(wx, wz, 15, this.seed) * 2 - 1) * 0.06;
+        const tiltZ = (rand01(wx, wz, 16, this.seed) * 2 - 1) * 0.06;
+        const quat = new Quaternion().setFromEuler(tmpEuler.set(tiltX, yaw, tiltZ));
+
+        trees.push({
+          pos: new Vector3(fx, y, fz),
+          rot: quat,
+          scale: pine,
+        });
+      }
     }
 
     return { cx, cz, trees };
@@ -352,8 +330,8 @@ export class TreeManager {
               this.terrain.getSample((minX + maxX) * 0.5, (minZ + maxZ) * 0.5).baseHeight,
             ];
             const meta = this.getOrCreateMeta(cx, cz);
-            meta.minY = Math.min(...ySamples) - this.maxScale * this.baseHeight - 1;
-            meta.maxY = Math.max(...ySamples) + this.maxScale * this.baseHeight + 1;
+            meta.minY = Math.min(...ySamples) - 1;
+            meta.maxY = Math.max(...ySamples) + 1;
           }
         }
       }

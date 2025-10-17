@@ -80,6 +80,7 @@ export class TerrainRenderer {
     const pines: number[] = [];
     const indices: number[] = [];
     const useBaseForHighLod = t.lod < 1;
+    // const useBaseForHighLod = false;
     for (let j = 0; j < res; j++) {
       for (let i = 0; i < res; i++) {
         const fx = i / (res - 1);
