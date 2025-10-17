@@ -24,7 +24,7 @@ export function findIslandSpawn(
     const r = jump * (0.5 + rng()); // random within band
     const x = Math.cos(angle) * r;
     const z = Math.sin(angle) * r;
-    const h = terrainData.getHeight(x, z);
+    const h = terrainData.getSample(x, z).height;
     if (h > 0) {
       landX = x;
       landZ = z;
@@ -48,7 +48,7 @@ export function findIslandSpawn(
     step *= 1.5;
     const x = landX + Math.cos(angle) * step;
     const z = landZ + Math.sin(angle) * step;
-    const h = terrainData.getHeight(x, z);
+    const h = terrainData.getSample(x, z).height;
     if (h < 0) {
       seaX = x;
       seaZ = z;
@@ -71,7 +71,7 @@ export function findIslandSpawn(
   for (let i = 0; i < 48; i++) {
     const mx = (ax + bx) * 0.5;
     const mz = (az + bz) * 0.5;
-    const mh = terrainData.getHeight(mx, mz);
+    const mh = terrainData.getSample(mx, mz).height;
     if (mh > 0) {
       ax = mx;
       az = mz;

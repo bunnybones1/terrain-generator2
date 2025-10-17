@@ -7,10 +7,12 @@ export function makeTerrainMaterial(cameraPosition: Vector3) {
   const rockTex = loadTex("textures/rocks.png");
   const snowTex = loadTex("textures/snow.png");
   const sandTex = loadTex("textures/sand.png");
+  const pineTex = loadTex("textures/pineneedles.png");
   const grassNormalsTex = loadTex("textures/grass-normals.png");
   const rockNormalsTex = loadTex("textures/rocks-normals.png");
   const snowNormalsTex = loadTex("textures/snow-normals.png");
   const sandNormalsTex = loadTex("textures/sand-normals.png");
+  const pineNormalsTex = loadTex("textures/pineneedles-normals.png");
 
   // Base material
   const mat = new MeshStandardMaterial({
@@ -32,9 +34,11 @@ export function makeTerrainMaterial(cameraPosition: Vector3) {
     shader.uniforms.uRock = { value: rockTex };
     shader.uniforms.uSnow = { value: snowTex };
     shader.uniforms.uSand = { value: sandTex };
+    shader.uniforms.uPine = { value: pineTex };
     shader.uniforms.uRockNormal = { value: rockNormalsTex };
     shader.uniforms.uSnowNormal = { value: snowNormalsTex };
     shader.uniforms.uSandNormal = { value: sandNormalsTex };
+    shader.uniforms.uPineNormal = { value: pineNormalsTex };
 
     // Tiling base and per-layer scale (x: base tiling.x, y: base tiling.y, z: unused)
     shader.uniforms.uTiling = { value: tiling };
@@ -92,6 +96,9 @@ export function makeTerrainMaterial(cameraPosition: Vector3) {
         varying float vHeight;
         varying vec3 vWorldPos;
         varying vec3 vWorldNormal;
+        // Pine tint varying from geometry attribute
+        attribute float pine;
+        varying float vPine;
         `
       )
       .replace(
@@ -113,6 +120,11 @@ export function makeTerrainMaterial(cameraPosition: Vector3) {
         vec3 nObj = normal;
         vec3 nWorld = normalize((objToWorld * vec4(nObj, 0.0)).xyz);
         vWorldNormal = nWorld;
+
+        // Pass pine attribute (0..1), default to 0 if attribute not provided
+        #ifdef GL_OES_standard_derivatives
+        #endif
+        vPine = pine;
         `
       );
 
@@ -121,12 +133,15 @@ export function makeTerrainMaterial(cameraPosition: Vector3) {
         "#include <common>",
         `
         #include <common>
+        varying float vPine;
         uniform sampler2D uRock;
         uniform sampler2D uSnow;
         uniform sampler2D uSand;
+        uniform sampler2D uPine;
         uniform sampler2D uRockNormal;
         uniform sampler2D uSnowNormal;
         uniform sampler2D uSandNormal;
+        uniform sampler2D uPineNormal;
 
         uniform vec2 uTiling;
         uniform vec3 uTilingScales;
@@ -253,10 +268,12 @@ export function makeTerrainMaterial(cameraPosition: Vector3) {
         vec2 uvRock = warpUv(uvBase * uTilingScales.x, vWorldPos + vec3(13.1,0.0,7.7));
         vec2 uvSnow = warpUv(uvBase * uTilingScales.y, vWorldPos + vec3(2.3,0.0,19.9));
         vec2 uvSand = warpUv(uvBase * uTilingScales.z, vWorldPos + vec3(31.7,0.0,3.1));
+        vec2 uvPine = warpUv(uvBase * uTilingScales.x, vWorldPos + vec3(17.3,0.0,9.1)); // reuse rock scale as default
 
         vec3 rockSample = texture2D( uRock, uvRock ).rgb;
         vec3 snowSample = texture2D( uSnow, uvSnow ).rgb;
         vec3 sandSample = texture2D( uSand, uvSand ).rgb;
+        vec3 pineSample = texture2D( uPine, uvPine ).rgb;
 
         vec3 baseAlbedo = diffuseColor.rgb;
 
@@ -270,6 +287,9 @@ export function makeTerrainMaterial(cameraPosition: Vector3) {
 
         // Rock by slope
         float tRock = bandstep(uSlope.x, uSlope.y, slope);
+        // Allow rock when pine coverage is low: enable if vPine < 0.2
+        float rockEnable = 1.0 - step(0.2, vPine); // 1 when vPine < 0.2, 0 when >= 0.2
+        tRock *= rockEnable;
         vec3 albedoGSR = mix(albedoGS, rockSample, tRock);
 
         // Snow: appear on tops first; as elevation increases, allow snow on steeper slopes.
@@ -294,6 +314,10 @@ export function makeTerrainMaterial(cameraPosition: Vector3) {
 
         // Keep weights in scope: tSand, tRock, tSnow
         diffuseColor.rgb = mix(albedoGSR, snowSample, tSnow);
+
+        // Mix pine texture based on per-vertex pine attribute
+        float pineAmt = clamp(vPine * 100.0, 0.0, 1.0);
+        diffuseColor.rgb = mix(diffuseColor.rgb, pineSample, pineAmt);
         `
       )
       .replace(
@@ -317,11 +341,14 @@ export function makeTerrainMaterial(cameraPosition: Vector3) {
           vec3 rockTangentNormal = normalize(texture2D( uRockNormal, warpUv(uvNBase * uTilingScales.x, vWorldPos + vec3(13.1,0.0,7.7)) ).xyz * 2.0 - 1.0);
           vec3 snowTangentNormal = normalize(texture2D( uSnowNormal, warpUv(uvNBase * uTilingScales.y, vWorldPos + vec3(2.3,0.0,19.9)) ).xyz * 2.0 - 1.0);
           vec3 sandTangentNormal = normalize(texture2D( uSandNormal, warpUv(uvNBase * uTilingScales.z, vWorldPos + vec3(31.7,0.0,3.1)) ).xyz * 2.0 - 1.0);
+          vec3 pineTangentNormal = normalize(texture2D( uPineNormal, warpUv(uvNBase * uTilingScales.x, vWorldPos + vec3(17.3,0.0,9.1)) ).xyz * 2.0 - 1.0);
 
           // Reuse previously computed weights from albedo stage directly
           vec3 nGS = normalize( mix(baseTangentNormal, sandTangentNormal, tSand) );
-          vec3 nGSR = normalize( mix(nGS, rockTangentNormal, tRock) );
-          vec3 blendedTangentNormal = normalize( mix(nGSR, snowTangentNormal, clamp(tSnow, 0.0, 1.0)) );
+          float rockEnableN = 1.0 - step(0.2, vPine); // enable normals when vPine < 0.2
+          vec3 nGSR = normalize( mix(nGS, rockTangentNormal, tRock * rockEnableN) );
+          vec3 nGSRSnow = normalize( mix(nGSR, snowTangentNormal, clamp(tSnow, 0.0, 1.0)) );
+          vec3 blendedTangentNormal = normalize( mix(nGSRSnow, pineTangentNormal, clamp(vPine, 0.0, 1.0)) );
           blendedTangentNormal.xy *= normalScale;
 
           vec3 mapN = blendedTangentNormal;

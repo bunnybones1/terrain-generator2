@@ -3,8 +3,8 @@ import { TerrainData } from "./TerrainData";
 export class TerrainSampler {
   constructor(public data: TerrainData) {}
 
-  getHeight(x: number, z: number): number {
-    return this.data.getHeight(x, z);
+  getHeight(x: number, z: number) {
+    return this.data.getSample(x, z);
   }
 
   getNormal(x: number, z: number): [number, number, number] {
@@ -13,6 +13,9 @@ export class TerrainSampler {
 
   getSlope(x: number, z: number): number {
     return this.data.getSlope(x, z);
+  }
+  getSlopeApprox(x: number, z: number): number {
+    return this.data.getSlopeApprox(x, z);
   }
 
   getSplatWeights(x: number, z: number): [number, number, number, number] {
@@ -31,7 +34,7 @@ export class TerrainSampler {
       const x = origin.x + dir.x * t;
       const z = origin.z + dir.z * t;
       const y = origin.y + dir.y * t;
-      const h = this.getHeight(x, z);
+      const h = this.getHeight(x, z).height;
       if (y <= h) {
         return { hit: true, point: { x, y: h, z } };
       }

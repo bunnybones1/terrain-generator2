@@ -31,7 +31,7 @@ export class TerrainQuadtree {
       const size = cfg.tileSize * Math.pow(2, t.lod);
       const cx = t.tx * size + size * 0.5;
       const cz = t.tz * size + size * 0.5;
-      const cy = this.sampler.getHeight(cx, cz); // sampled ground height at tile center
+      const cy = this.sampler.getHeight(cx, cz).height; // sampled ground height at tile center
       const dx = cx - camX;
       const dy = cy - camera.position.y;
       const dz = cz - camZ;

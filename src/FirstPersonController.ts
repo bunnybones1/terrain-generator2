@@ -125,7 +125,7 @@ export default class FirstPersonController {
     // Our convention: yaw rotates around Y, forward vector is (0,0,-1) at yaw=0; to face (dx,dz), yaw = atan2(dx, -dz)
     this.yaw = spawn.angle;
     // height should be very close to 0; use sampler for consistency and add a small offset
-    const groundH0 = terrainSampler.getHeight(spawn.x, spawn.z) + initialHeight;
+    const groundH0 = terrainSampler.getHeight(spawn.x, spawn.z).height + initialHeight;
     camera.position.y = Math.max(0, groundH0) + this.eyeHeight + 0.5;
 
     // Initialize smoothed position
@@ -194,7 +194,7 @@ export default class FirstPersonController {
       this.target.z += vz;
 
       // Keep camera above ground while flying
-      const groundH_fly = this.terrainSampler.getHeight(this.target.x, this.target.z);
+      const groundH_fly = this.terrainSampler.getHeight(this.target.x, this.target.z).height;
       const minFlyY = groundH_fly + this.eyeHeight + 1;
       if (this.target.y < minFlyY) {
         this.target.y = minFlyY;
@@ -255,7 +255,7 @@ export default class FirstPersonController {
       this.target.z += vz;
 
       // Keep camera above ground while swimming
-      const groundH_swim = this.terrainSampler.getHeight(this.target.x, this.target.z);
+      const groundH_swim = this.terrainSampler.getHeight(this.target.x, this.target.z).height;
       const minSwimY = groundH_swim + 0.25;
       if (this.target.y < minSwimY) {
         this.target.y = minSwimY;
@@ -301,7 +301,7 @@ export default class FirstPersonController {
       // Gravity and ground collision
       this.velocityY += this.gravity * dt;
 
-      const groundH = this.terrainSampler.getHeight(this.target.x, this.target.z);
+      const groundH = this.terrainSampler.getHeight(this.target.x, this.target.z).height;
       const targetEyeY = groundH + this.eyeHeight;
 
       let newY = this.camera.position.y + this.velocityY * dt;

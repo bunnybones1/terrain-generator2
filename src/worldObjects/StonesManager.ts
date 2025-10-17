@@ -180,11 +180,11 @@ export class StonesManager {
 
     // Sample terrain heights at corners and center once
     const ySamples = [
-      this.terrain.getHeight(minX, minZ),
-      this.terrain.getHeight(maxX, minZ),
-      this.terrain.getHeight(minX, maxZ),
-      this.terrain.getHeight(maxX, maxZ),
-      this.terrain.getHeight((minX + maxX) * 0.5, (minZ + maxZ) * 0.5),
+      this.terrain.getHeight(minX, minZ).height,
+      this.terrain.getHeight(maxX, minZ).height,
+      this.terrain.getHeight(minX, maxZ).height,
+      this.terrain.getHeight(maxX, maxZ).height,
+      this.terrain.getHeight((minX + maxX) * 0.5, (minZ + maxZ) * 0.5).height,
     ];
     const minY = Math.min(...ySamples) - this.maxScale - 1;
     const maxY = Math.max(...ySamples) + this.maxScale + 1;
@@ -224,7 +224,7 @@ export class StonesManager {
       const x = (cx + 0.5 + rx) * cs;
       const z = (cz + 0.5 + rz) * cs;
 
-      const y = this.terrain.getHeight(x, z);
+      const y = this.terrain.getHeight(x, z).baseHeight;
       const slope = this.terrain.getSlope(x, z);
       if (y > 0 && slope < 0.5) continue;
 

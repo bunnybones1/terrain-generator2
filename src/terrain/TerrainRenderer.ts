@@ -77,6 +77,7 @@ export class TerrainRenderer {
     // Build grid positions and uvs
     const verts: number[] = [];
     const uvs: number[] = [];
+    const pines: number[] = [];
     const indices: number[] = [];
     for (let j = 0; j < res; j++) {
       for (let i = 0; i < res; i++) {
@@ -84,8 +85,10 @@ export class TerrainRenderer {
         const fz = j / (res - 1);
         const wx = x + fx * size;
         const wz = z + fz * size;
-        const wy = this.data.getHeight(wx, wz);
+        const terrainSample = this.data.getSample(wx, wz);
+        const wy = terrainSample.height;
         verts.push(wx, wy, wz);
+        pines.push(terrainSample.pine ?? 0);
         // World-space UVs: 1.0 UV = 4 meters in world space
         uvs.push(wx / 4.0, wz / 4.0);
       }
@@ -104,6 +107,7 @@ export class TerrainRenderer {
     // First, assign base attributes and compute normals for the base grid only
     geo.setAttribute("position", new BufferAttribute(new Float32Array(verts), 3));
     geo.setAttribute("uv", new BufferAttribute(new Float32Array(uvs), 2));
+    geo.setAttribute("pine", new BufferAttribute(new Float32Array(pines), 1));
     geo.setIndex(indices);
     geo.computeVertexNormals();
 
@@ -121,11 +125,13 @@ export class TerrainRenderer {
       v: number,
       nx: number,
       ny: number,
-      nz: number
+      nz: number,
+      pineVal: number
     ) => {
       verts.push(wx, wy, wz);
       uvs.push(u, v);
       normals.push(nx, ny, nz);
+      pines.push(pineVal);
       return verts.length / 3 - 1;
     };
 
@@ -163,8 +169,28 @@ export class TerrainRenderer {
           n1z = normals[i1 * 3 + 2];
 
         // Recompute UVs from world coordinates for skirts as well (1 UV = 4 meters)
-        const s0 = pushVertex(x0, y0 - skirtHeight, z0, x0 / 4.0, z0 / 4.0, n0x, n0y, n0z);
-        const s1 = pushVertex(x1, y1 - skirtHeight, z1, x1 / 4.0, z1 / 4.0, n1x, n1y, n1z);
+        const s0 = pushVertex(
+          x0,
+          y0 - skirtHeight,
+          z0,
+          x0 / 4.0,
+          z0 / 4.0,
+          n0x,
+          n0y,
+          n0z,
+          pines[i0]
+        );
+        const s1 = pushVertex(
+          x1,
+          y1 - skirtHeight,
+          z1,
+          x1 / 4.0,
+          z1 / 4.0,
+          n1x,
+          n1y,
+          n1z,
+          pines[i1]
+        );
 
         // Two triangles forming quad. Depending on edge direction, flip winding to keep outward facing.
         if (reverse) {
@@ -189,6 +215,7 @@ export class TerrainRenderer {
     geo.setAttribute("position", new BufferAttribute(new Float32Array(verts), 3));
     geo.setAttribute("uv", new BufferAttribute(new Float32Array(uvs), 2));
     geo.setAttribute("normal", new BufferAttribute(new Float32Array(normals), 3));
+    geo.setAttribute("pine", new BufferAttribute(new Float32Array(pines), 1));
     geo.setIndex(indices);
 
     // Slope can be derived from normals in shader; no need to store as attribute

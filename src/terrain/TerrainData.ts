@@ -1,6 +1,7 @@
 import { createNoise2D, NoiseFunction2D } from "simplex-noise";
 import { PRNG } from "../utils/PRNG";
-import { remapClamp } from "../utils/math";
+import { hash2, remapClamp, ridge } from "../utils/math";
+import { smoothstep } from "three/src/math/MathUtils.js";
 
 export type TerrainMaterialConfig = {
   splatScale?: number;
@@ -29,11 +30,42 @@ type DigLayer = {
   cells: Map<string, number>;
 };
 
+const pineCellSize = 4.0;
+const pineMaxHeight = 12.0; // meters
+const pineMinAltitude = 30;
+const pineMaxAltitude = 60;
+const pineAltitudeTransition = 10;
+const pineEdge0 = pineMinAltitude - pineAltitudeTransition;
+const pineEdge1 = pineMinAltitude;
+const pineEdge2 = pineMaxAltitude;
+const pineEdge3 = pineMaxAltitude + pineAltitudeTransition;
+
+const results = { height: 0, baseHeight: 0, pine: 0, pineWindow: 0 };
+
+const results3 = [0, 0, 0] as [number, number, number];
+
+const cacheGridSize = 4;
+
 export class TerrainData {
   readonly config: TerrainConfig;
   private simplex: NoiseFunction2D;
   private maskSimplex: NoiseFunction2D;
   private rng: PRNG;
+
+  // 4 m grid cache for base heights
+  private readonly baseHeightGridSize = cacheGridSize; // meters
+  private baseHeightCache = new Map<string, number>();
+
+  private baseHeightCacheKey(ix: number, iz: number): string {
+    return `${ix}:${iz}`;
+  }
+
+  // 4 m grid cache for slopes
+  private readonly slopeGridSize = cacheGridSize; // meters
+  private slopeCache = new Map<string, number>();
+  private slopeCacheKey(ix: number, iz: number): string {
+    return `${ix}:${iz}`;
+  }
 
   // Dig layers at 0.5m doubling 6 times: 0.5,1,2,4,8,16,32
   private digLayers: DigLayer[] = [];
@@ -186,8 +218,60 @@ export class TerrainData {
     return arr;
   }
 
+  // Get or compute base height at a grid point (ix,iz) in the 4m cache
+  private getBaseHeightGridSample(ix: number, iz: number): number {
+    const key = this.baseHeightCacheKey(ix, iz);
+    const hit = this.baseHeightCache.get(key);
+    if (hit !== undefined) return hit;
+
+    const s = this.baseHeightGridSize;
+    const wx = ix * s;
+    const wz = iz * s;
+    const h = this.getBaseHeight(wx, wz);
+    this.baseHeightCache.set(key, h);
+    return h;
+  }
+
+  // Get or compute slope at a grid point (ix,iz) in the 4m cache
+  private getSlopeGridSample(ix: number, iz: number): number {
+    const key = this.slopeCacheKey(ix, iz);
+    const hit = this.slopeCache.get(key);
+    if (hit !== undefined) return hit;
+
+    const s = this.slopeGridSize;
+    const wx = ix * s;
+    const wz = iz * s;
+    // Compute slope from approximated normal (cheap and smooth)
+    const n = this.getNormalApprox(wx, wz);
+    const ny = n[1];
+    const slope = Math.sqrt(Math.max(0, 1 - ny * ny)); // 0..1
+    this.slopeCache.set(key, slope);
+    return slope;
+  }
+
+  getBaseHeightApprox(x: number, z: number) {
+    const s = this.baseHeightGridSize;
+    const fx = x / s;
+    const fz = z / s;
+    const ix = Math.floor(fx);
+    const iz = Math.floor(fz);
+    const tx = fx - ix;
+    const tz = fz - iz;
+
+    // Fetch four neighboring cached samples (compute and cache if missing)
+    const h00 = this.getBaseHeightGridSample(ix, iz);
+    const h10 = this.getBaseHeightGridSample(ix + 1, iz);
+    const h01 = this.getBaseHeightGridSample(ix, iz + 1);
+    const h11 = this.getBaseHeightGridSample(ix + 1, iz + 1);
+
+    // Bilinear interpolation
+    const a = h00 * (1 - tx) + h10 * tx;
+    const b = h01 * (1 - tx) + h11 * tx;
+    return a * (1 - tz) + b * tz;
+  }
+
   // World height in meters at x,z (meters)
-  getHeight(x: number, z: number): number {
+  getBaseHeight(x: number, z: number) {
     // Simple 6-octave low-frequency fractal Brownian motion (fBm)
     const baseFreq = 1 / 8196; // very low frequency for broad features
     const octavesBase = 7;
@@ -203,7 +287,7 @@ export class TerrainData {
     let ampSum = 0;
 
     for (let i = 0; i < octavesBase; i++) {
-      const n = this.noise2d(x * freq, z * freq); // -1..1
+      const n = this.simplex(x * freq, z * freq); // -1..1
       sum += n * amp;
       ampSum += amp;
       freq *= lacunarity;
@@ -216,7 +300,7 @@ export class TerrainData {
     let kSum = 0;
     let kAmpSum = 0;
     for (let i = 0; i < octavesBase; i++) {
-      const kn = this.noise2d(x * kFreq, z * kFreq); // -1..1
+      const kn = this.simplex(x * kFreq, z * kFreq); // -1..1
       kSum += kn * kAmp;
       kAmpSum += kAmp;
       kFreq *= lacunarity;
@@ -264,9 +348,9 @@ export class TerrainData {
     sum = 0;
     ampSum = 0;
     for (let i = 0; i < octavesRidges; i++) {
-      const n = this.noise2d(x * freq, z * freq); // -1..1
+      const n = this.simplex(x * freq, z * freq); // -1..1
       // Sharpen ridge response to emphasize carving
-      const r = this.ridge(n); // 0..1
+      const r = ridge(n); // 0..1
       sum += Math.pow(r, 1.5) * amp;
       ampSum += amp;
       freq *= lacunarity;
@@ -308,8 +392,8 @@ export class TerrainData {
       let hsum = 0;
       let hampSum = 0;
       for (let i = 0; i < hillsOctaves; i++) {
-        const n = this.noise2d(x * hf, z * hf); // -1..1
-        const r = this.ridge(n); // 0..1 ridge-like
+        const n = this.simplex(x * hf, z * hf); // -1..1
+        const r = ridge(n); // 0..1 ridge-like
         hsum += Math.pow(r, 1.25) * ha; // slight sharpening
         hampSum += ha;
         hf *= 2.0;
@@ -327,15 +411,123 @@ export class TerrainData {
     // Subtract dig layers
     const dig = this.sampleDig(x, z);
     height -= dig;
-
-    // Clamp to desired range
-    // height = Math.max(-500, Math.min(500, height));
     return height;
+  }
+  getSample(x: number, z: number) {
+    const baseHeight = this.getBaseHeight(x, z);
+    // Add pine trees: Worley-like cell peaks (~4m cells), up to 7m height,
+    // only active between 20m..60m with 5m falloff on each side (i.e., 15..65 soft range).
+    // Worley helper: distance to nearest pseudo-random feature point in each cell and its neighbors
+    const fx = x / pineCellSize;
+    const fz = z / pineCellSize;
+    const ix = Math.floor(fx);
+    const iz = Math.floor(fz);
+    const px = fx - ix;
+    const pz = fz - iz;
+
+    let minD = 1e9;
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const [jx, jz] = hash2(ix + dx, iz + dz);
+        const cx = dx + jx; // local cell center jittered
+        const cz = dz + jz;
+        const dxp = px - cx;
+        const dzp = pz - cz;
+        const d2 = dxp * dxp + dzp * dzp;
+        if (d2 < minD) minD = d2;
+      }
+    }
+    const d = Math.sqrt(minD); // 0..~1.2
+    // Convert distance to a peak: nearest -> peak 1, farther -> 0
+    const peak = Math.max(0, 1 - d); // wider/narrower by factor
+
+    // Multi-octave ridge-like noise used to modulate pine edges
+    const ridgeBaseScale = 1 / 500;
+    const ridgeOctaves = 6;
+    const lac = 2.0;
+    const gain = 0.55;
+    const ridgeSharp = 1.2;
+    const anisotropy = 1.8;
+    const angle = 0.35;
+
+    const cosA = Math.cos(angle);
+    const sinA = Math.sin(angle);
+    const rx = cosA * x - sinA * z;
+    const rz = sinA * x + cosA * z;
+
+    let f = ridgeBaseScale;
+    let aOct = 1.0;
+    let acc = 0;
+    let accAmp = 0;
+    for (let o = 0; o < ridgeOctaves; o++) {
+      const nx = rx * f;
+      const nz = (rz * f) / anisotropy;
+      const n = this.simplex(nx, nz); // -1..1
+      const r = ridge(n); // 0..1
+      const rSharp = Math.pow(r, ridgeSharp);
+      acc += rSharp * aOct;
+      accAmp += aOct;
+      f *= lac;
+      aOct *= gain;
+    }
+    const ridgeN = accAmp > 0 ? acc / accAmp : 0; // 0..1
+
+    // Edge modulation amounts in meters
+    const upAmount = 20; // edges 0/1 go up by upAmount*r
+    const downAmount = 180; // edges 2/3 go down by downAmount*r
+
+    const edge0m = pineEdge0 - upAmount * ridgeN;
+    const edge1m = pineEdge1 - upAmount * ridgeN;
+    const edge2m = pineEdge2 + downAmount * ridgeN;
+    const edge3m = pineEdge3 + downAmount * ridgeN;
+
+    // Use modulated edges
+    const rise = smoothstep(baseHeight, edge0m, edge1m);
+    const fall = 1 - smoothstep(baseHeight, edge2m, edge3m);
+
+    // pinePower: 1 fully inside band, ramps 0->1 entering, 1->0 exiting, 0 outside
+    let pineWindow = 0;
+    if (baseHeight <= edge0m || baseHeight >= edge3m) {
+      pineWindow = 0;
+    } else if (baseHeight < edge1m) {
+      pineWindow = rise;
+    } else if (baseHeight > edge2m) {
+      pineWindow = fall;
+    } else {
+      pineWindow = 1;
+    }
+
+    if (pineWindow > 0) {
+      // Attenuate pinePower on slopes: start reducing at 0.3, zero by 0.5
+      const slope = this.getSlopeApprox(x, z);
+      const slopeAtten = 1 - smoothstep(slope, 0.3, 0.4);
+      pineWindow *= slopeAtten;
+    }
+
+    // Unadjusted pine peak contribution (above ground)
+    const pinePeak = peak * pineMaxHeight;
+    const pineTop = baseHeight + pinePeak;
+
+    // In transition, slide peaks down towards the ground as we leave the window,
+    // with zero slide fully inside the band and full slide outside. Never go below ground.
+    const slideDown = (1 - pineWindow) * pineMaxHeight; // 0 inside, full outside
+    const pineAdjustedTop = pineTop - slideDown;
+
+    // Clamp against ground so we don't invert: max with current ground 'height'
+    const heightWithPine = Math.max(baseHeight, pineAdjustedTop);
+
+    results.baseHeight = baseHeight;
+    const pine = heightWithPine - baseHeight;
+    results.height = heightWithPine;
+    results.pine = pine;
+    results.pineWindow = pineWindow;
+
+    return results;
   }
 
   getSplatWeights(x: number, z: number): [number, number, number, number] {
     // Simple RGBA mask: grass in G channel from low slopes/heights, rock in R for steep/high
-    const h = this.getHeight(x, z);
+    const h = this.getSample(x, z).height;
     const slope = this.getSlope(x, z);
     // Adapt thresholds to new height range [-500, 500]
     const g = remapClamp(0.0, 0.6, 1 - slope) * remapClamp(-300, 150, 150 - Math.abs(h));
@@ -349,16 +541,36 @@ export class TerrainData {
 
   getNormal(x: number, z: number): [number, number, number] {
     const eps = 0.5;
-    const hL = this.getHeight(x - eps, z);
-    const hR = this.getHeight(x + eps, z);
-    const hD = this.getHeight(x, z - eps);
-    const hU = this.getHeight(x, z + eps);
+    const hL = this.getBaseHeight(x - eps, z);
+    const hR = this.getBaseHeight(x + eps, z);
+    const hD = this.getBaseHeight(x, z - eps);
+    const hU = this.getBaseHeight(x, z + eps);
     // normal from gradient
     const nx = hL - hR;
     const ny = 2 * eps;
     const nz = hD - hU;
     const invLen = 1 / Math.hypot(nx, ny, nz);
-    return [nx * invLen, ny * invLen, nz * invLen];
+    results3[0] = nx * invLen;
+    results3[1] = ny * invLen;
+    results3[2] = nz * invLen;
+    return results3;
+  }
+
+  getNormalApprox(x: number, z: number): [number, number, number] {
+    const eps = 0.5;
+    const hL = this.getBaseHeightApprox(x - eps, z);
+    const hR = this.getBaseHeightApprox(x + eps, z);
+    const hD = this.getBaseHeightApprox(x, z - eps);
+    const hU = this.getBaseHeightApprox(x, z + eps);
+    // normal from gradient
+    const nx = hL - hR;
+    const ny = 2 * eps;
+    const nz = hD - hU;
+    const invLen = 1 / Math.hypot(nx, ny, nz);
+    results3[0] = nx * invLen;
+    results3[1] = ny * invLen;
+    results3[2] = nz * invLen;
+    return results3;
   }
 
   getSlope(x: number, z: number): number {
@@ -366,6 +578,28 @@ export class TerrainData {
     // slope = sin(theta) = sqrt(1 - ny^2), return 0..1
     const ny = n[1];
     return Math.sqrt(Math.max(0, 1 - ny * ny));
+  }
+
+  // Bilinearly interpolated slope from 4m slope cache
+  getSlopeApprox(x: number, z: number): number {
+    const s = this.slopeGridSize;
+    const fx = x / s;
+    const fz = z / s;
+    const ix = Math.floor(fx);
+    const iz = Math.floor(fz);
+    const tx = fx - ix;
+    const tz = fz - iz;
+
+    // Fetch four neighboring cached slope samples
+    const s00 = this.getSlopeGridSample(ix, iz);
+    const s10 = this.getSlopeGridSample(ix + 1, iz);
+    const s01 = this.getSlopeGridSample(ix, iz + 1);
+    const s11 = this.getSlopeGridSample(ix + 1, iz + 1);
+
+    // Bilinear interpolation
+    const a = s00 * (1 - tx) + s10 * tx;
+    const b = s01 * (1 - tx) + s11 * tx;
+    return a * (1 - tz) + b * tz;
   }
 
   worldToTileCoords(x: number, z: number, lod: number): { tx: number; tz: number } {
@@ -385,13 +619,6 @@ export class TerrainData {
     return { x: t.tx * size, z: t.tz * size, size };
   }
 
-  // Helpers
-  private noise2d(x: number, z: number): number {
-    return this.simplex(x, z);
-  }
-  private ridge(n: number): number {
-    return (1 - Math.abs(n)) * (1 - Math.abs(n));
-  }
   private maskNoise(x: number, z: number): number {
     const s = 1 / 40;
     return (this.maskSimplex(x * s, z * s) + 1) * 0.5;
