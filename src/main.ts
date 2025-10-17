@@ -98,12 +98,7 @@ window.addEventListener("resize", resize);
 
 // Re-seed and export handlers
 window.addEventListener("keydown", (e) => {
-  const key = e.key.toLowerCase();
-  if (key === "r") {
-    //
-  } else if (key === "e") {
-    //
-  } else if (e.key === "[" || e.key === "{") {
+  if (e.key === "[" || e.key === "{") {
     // decrease dig radius nonlinearly; bigger digs change faster
     const r0 = firstPersonController.digRadius;
     const step = Math.max(0.5, Math.min(10, r0 * 0.15)); // 15% of current size, min 0.5, max 10
