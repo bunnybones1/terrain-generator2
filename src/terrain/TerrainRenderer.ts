@@ -3,8 +3,6 @@ import {
   BufferGeometry,
   Camera,
   Color,
-  Material,
-  Matrix4,
   Mesh,
   MeshStandardMaterial,
   Scene,
@@ -19,8 +17,7 @@ type TileEntry = {
 };
 
 export class TerrainRenderer {
-  private tiles = new Map<string, TileEntry>();
-  private scratchMat = new Matrix4();
+  public tiles = new Map<string, TileEntry>();
 
   constructor(
     private data: TerrainData,
@@ -48,6 +45,29 @@ export class TerrainRenderer {
         this.tiles.delete(key);
       }
     }
+
+    // Rebuild tiles marked dirty due to terrain edits
+    const dirty = this.data.popDirtyTiles();
+    for (const key of dirty) {
+      const entry = this.tiles.get(key);
+      if (entry) {
+        const [tx, tz, lod] = key.split(":").map((v) => parseInt(v, 10));
+        this.rebuildTile({ tx, tz, lod });
+      }
+    }
+  }
+
+  private rebuildTile(t: TileCoords) {
+    const key = `${t.tx}:${t.tz}:${t.lod}`;
+    const entry = this.tiles.get(key);
+    if (!entry) return;
+    // remove old mesh
+    this.scene.remove(entry.mesh);
+    entry.mesh.geometry.dispose();
+    // build and add new
+    const mesh = this.buildTile(t);
+    this.scene.add(mesh);
+    this.tiles.set(key, { mesh, key });
   }
 
   private buildTile(t: TileCoords): Mesh {

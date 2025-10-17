@@ -23,11 +23,22 @@ export type TileCoords = {
   lod: number;
 };
 
+type DigLayer = {
+  cellSize: number; // meters per cell
+  // keyed by `${ix}:${iz}`
+  cells: Map<string, number>;
+};
+
 export class TerrainData {
   readonly config: TerrainConfig;
   private simplex: NoiseFunction2D;
   private maskSimplex: NoiseFunction2D;
   private rng: PRNG;
+
+  // Dig layers at 0.5m doubling 6 times: 0.5,1,2,4,8,16,32
+  private digLayers: DigLayer[] = [];
+  // track dirty tiles affected by edits to trigger regeneration outside
+  private dirtyTiles = new Set<string>();
 
   constructor(config: TerrainConfig, seed = 1337) {
     void seed;
@@ -35,6 +46,144 @@ export class TerrainData {
     this.rng = new PRNG(seed);
     this.simplex = createNoise2D(this.rng.next);
     this.maskSimplex = createNoise2D(this.rng.next);
+    this.initDigLayers();
+  }
+
+  private initDigLayers() {
+    const start = 0.5;
+    const count = 7; // 0.5 * 2^6
+    this.digLayers.length = 0;
+    for (let i = 0; i < count; i++) {
+      this.digLayers.push({
+        cellSize: start * Math.pow(2, i),
+        cells: new Map(),
+      });
+    }
+  }
+
+  // Sample combined dig depth at world x,z by bilinear interpolation in each layer
+  private sampleDig(x: number, z: number): number {
+    let d = 0;
+    for (const layer of this.digLayers) {
+      d += this.sampleDigLayer(layer, x, z);
+    }
+    return d;
+  }
+
+  private sampleDigLayer(layer: DigLayer, x: number, z: number): number {
+    const s = layer.cellSize;
+    const fx = x / s;
+    const fz = z / s;
+    const ix = Math.floor(fx);
+    const iz = Math.floor(fz);
+    const tx = fx - ix;
+    const tz = fz - iz;
+
+    // fetch four neighbors
+    const v00 = this.getDigCell(layer, ix, iz);
+    const v10 = this.getDigCell(layer, ix + 1, iz);
+    const v01 = this.getDigCell(layer, ix, iz + 1);
+    const v11 = this.getDigCell(layer, ix + 1, iz + 1);
+
+    // bilinear
+    const a = v00 * (1 - tx) + v10 * tx;
+    const b = v01 * (1 - tx) + v11 * tx;
+    return a * (1 - tz) + b * tz;
+  }
+
+  private getDigCell(layer: DigLayer, ix: number, iz: number): number {
+    const key = `${ix}:${iz}`;
+    const v = layer.cells.get(key);
+    return v ?? 0;
+  }
+
+  private setDigCell(layer: DigLayer, ix: number, iz: number, value: number) {
+    const key = `${ix}:${iz}`;
+    if (value <= 1e-5) {
+      // clear near-zero to keep memory small
+      if (layer.cells.has(key)) layer.cells.delete(key);
+    } else {
+      layer.cells.set(key, value);
+    }
+  }
+
+  // Write a spherical depression centered at (x,z) with radius r and depth h (positive depth)
+  // digSize approximates radius; choose layer whose cellSize is closest to r/6
+  addDigSphere(x: number, z: number, radius: number, depth: number) {
+    const targetCell = Math.max(0.5, radius / 6);
+    let best = 0;
+    let bestErr = Infinity;
+    for (let i = 0; i < this.digLayers.length; i++) {
+      const e = Math.abs(this.digLayers[i].cellSize - targetCell);
+      if (e < bestErr) {
+        bestErr = e;
+        best = i;
+      }
+    }
+    const layer = this.digLayers[best];
+    this.rasterizeSphereToLayer(layer, x, z, radius, depth);
+
+    // mark dirty tiles intersecting the dig for later regeneration
+    this.markDirtyTilesForSphere(x, z, radius);
+  }
+
+  private rasterizeSphereToLayer(
+    layer: DigLayer,
+    cx: number,
+    cz: number,
+    radius: number,
+    depth: number
+  ) {
+    const s = layer.cellSize;
+    // determine affected cell range
+    const minX = Math.floor((cx - radius) / s);
+    const maxX = Math.floor((cx + radius) / s);
+    const minZ = Math.floor((cz - radius) / s);
+    const maxZ = Math.floor((cz + radius) / s);
+
+    for (let iz = minZ; iz <= maxZ; iz++) {
+      for (let ix = minX; ix <= maxX; ix++) {
+        // cell center
+        const wx = (ix + 0.5) * s;
+        const wz = (iz + 0.5) * s;
+        const dx = wx - cx;
+        const dz = wz - cz;
+        const dist = Math.hypot(dx, dz);
+        if (dist <= radius) {
+          // spherical cap: y = depth * (1 - (r^2 - d^2)/r^2)^0.5? Better: hemisphere projected.
+          // Simpler: smooth falloff: depth * (1 - (dist/r)^2)^0.5 to resemble spherical depression
+          const t = dist / Math.max(1e-6, radius);
+          const amount = depth * Math.sqrt(Math.max(0, 1 - t * t));
+          // accumulate additively so repeated digs deepen the depression
+          const prev = this.getDigCell(layer, ix, iz);
+          const next = prev + amount;
+          this.setDigCell(layer, ix, iz, next);
+        }
+      }
+    }
+  }
+
+  private markDirtyTilesForSphere(cx: number, cz: number, radius: number) {
+    // Check all LODs because renderer may be showing any
+    for (let lod = this.config.minLOD; lod <= this.config.maxLOD; lod++) {
+      const size = this.config.tileSize * Math.pow(2, lod);
+      const minTx = Math.floor((cx - radius) / size);
+      const maxTx = Math.floor((cx + radius) / size);
+      const minTz = Math.floor((cz - radius) / size);
+      const maxTz = Math.floor((cz + radius) / size);
+      for (let tz = minTz; tz <= maxTz; tz++) {
+        for (let tx = minTx; tx <= maxTx; tx++) {
+          this.dirtyTiles.add(`${tx}:${tz}:${lod}`);
+        }
+      }
+    }
+  }
+
+  // Consume and clear dirty tiles
+  popDirtyTiles(): string[] {
+    const arr = Array.from(this.dirtyTiles);
+    this.dirtyTiles.clear();
+    return arr;
   }
 
   // World height in meters at x,z (meters)
@@ -174,6 +323,10 @@ export class TerrainData {
       // Subtractive application
       height -= hillsN * hillsAmplitude * ramp;
     }
+
+    // Subtract dig layers
+    const dig = this.sampleDig(x, z);
+    height -= dig;
 
     // Clamp to desired range
     // height = Math.max(-500, Math.min(500, height));

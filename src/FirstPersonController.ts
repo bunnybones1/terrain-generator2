@@ -1,6 +1,8 @@
-import { PerspectiveCamera, Vector3, WebGLRenderer } from "three";
+import { Object3D, PerspectiveCamera, Raycaster, Vector2, Vector3, WebGLRenderer } from "three";
 import { TerrainSampler } from "./terrain/TerrainSampler";
 import { findIslandSpawn } from "./findIslandSpawn";
+import { TerrainRenderer } from "./terrain/TerrainRenderer";
+import { TerrainData } from "./terrain/TerrainData";
 
 // Movement helpers
 const tmpDir = new Vector3();
@@ -40,11 +42,21 @@ export default class FirstPersonController {
   // Persistent movement target (basis for real position)
   private target = new Vector3();
 
+  // Dig/raycast helpers
+  private raycaster = new Raycaster();
+  private mouseNDC = new Vector2();
+  private isDigging = false;
+
+  // Digging settings
+  public digRadius: number = 2.0; // meters
+
   constructor(
     private camera: PerspectiveCamera,
     private terrainSampler: TerrainSampler,
     renderer: WebGLRenderer,
-    spawnSeed: number
+    spawnSeed: number,
+    private terrainRenderer: TerrainRenderer,
+    private terrainData: TerrainData
   ) {
     // Pointer lock for mouse look
     renderer.domElement.addEventListener("click", () => {
@@ -54,6 +66,12 @@ export default class FirstPersonController {
       this.pointerLocked = document.pointerLockElement === renderer.domElement;
     });
     document.addEventListener("mousemove", (e) => {
+      // update last mouse NDC for raycasting (even if not locked)
+      const rect = renderer.domElement.getBoundingClientRect();
+      const x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      const y = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
+      this.mouseNDC.set(x, y);
+
       if (!this.pointerLocked) return;
       const sensitivity = 0.0025;
       this.yaw -= e.movementX * sensitivity;
@@ -81,6 +99,22 @@ export default class FirstPersonController {
     });
     document.addEventListener("keyup", (e) => {
       this.keys[e.code] = false;
+    });
+
+    // Press-and-hold digging handlers
+    renderer.domElement.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return; // left button only
+      // update NDC immediately
+      const rect = renderer.domElement.getBoundingClientRect();
+      const x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      const y = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
+      this.mouseNDC.set(x, y);
+      this.isDigging = true;
+    });
+    window.addEventListener("mouseup", (e) => {
+      if (e.button === 0) {
+        this.isDigging = false;
+      }
     });
 
     // Use island spawn to set initial camera position at shoreline and yaw
@@ -276,6 +310,32 @@ export default class FirstPersonController {
         this.velocityY = 0;
       }
       this.target.y = newY;
+    }
+
+    // Continuous digging while mouse is held
+    if (this.isDigging) {
+      // When pointer is locked, always dig straight from screen center; else use mouse position
+      if (this.pointerLocked) {
+        this.raycaster.setFromCamera(new Vector2(0, 0), this.camera);
+      } else {
+        this.raycaster.setFromCamera(this.mouseNDC, this.camera);
+      }
+      const terrainMeshes: Object3D[] = [];
+      for (const entry of this.terrainRenderer.tiles.values()) {
+        terrainMeshes.push(entry.mesh);
+      }
+      if (terrainMeshes.length > 0) {
+        const hits = this.raycaster.intersectObjects(terrainMeshes, true);
+        if (hits.length > 0) {
+          const hit = hits[0];
+          const hx = hit.point.x;
+          const hz = hit.point.z;
+          const radius = this.digRadius;
+          const digRate = this.digRadius * 0.5;
+          const depthThisFrame = digRate * dt;
+          this.terrainData.addDigSphere(hx, hz, radius, depthThisFrame);
+        }
+      }
     }
 
     // Lerp smoothed position towards target

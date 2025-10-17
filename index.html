@@ -36,7 +36,7 @@
         border-radius: 8px;
         backdrop-filter: blur(4px);
         box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
-        pointer-events: none;
+        pointer-events: auto; /* allow overlay to receive events so they don't hit the canvas */
         max-width: 280px;
       }
       .ui-overlay b {
@@ -71,7 +71,7 @@
     </style>
   </head>
   <body>
-    <div class="ui-overlay">
+    <div class="ui-overlay" id="ui-overlay">
       <div class="title">Keyboard shortcuts</div>
       <div class="row">
         <span class="kbd">W</span><span class="kbd">A</span><span class="kbd">S</span
@@ -82,7 +82,32 @@
       <div class="row">
         <span class="kbd">Ctrl</span><span class="kbd">Space</span> Ascend / Descend
       </div>
+      <div class="row">
+        <span class="kbd">[</span><span class="kbd">]</span> - / + Dig Size (<span id="dig-radius"
+          >2</span
+        >m)
+      </div>
     </div>
+    <script>
+      // Prevent overlay clicks from triggering canvas handlers
+      const overlay = document.getElementById("ui-overlay");
+      if (overlay) {
+        const stop = (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+        };
+        [
+          "pointerdown",
+          "pointerup",
+          "pointermove",
+          "mousedown",
+          "mouseup",
+          "click",
+          "wheel",
+          "contextmenu",
+        ].forEach((ev) => overlay.addEventListener(ev, stop));
+      }
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
