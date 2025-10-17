@@ -10,6 +10,7 @@ import {
   Box3,
   PerspectiveCamera,
   IcosahedronGeometry,
+  Euler,
 } from "three";
 import { TerrainSampler } from "../terrain/TerrainSampler";
 import { PRNG } from "../utils/PRNG";
@@ -27,7 +28,7 @@ export interface StonesManagerConfig {
 
 type StoneInstance = {
   pos: Vector3;
-  rotY: number;
+  rot: Quaternion;
   scale: number;
 };
 
@@ -45,6 +46,8 @@ type CellMeta = {
   minY: number;
   maxY: number;
 };
+
+const tmpEuler = new Euler();
 
 const STONE_ON_GROUND_OFFSET = 0;
 export class StonesManager {
@@ -230,11 +233,20 @@ export class StonesManager {
       const slope = this.terrain.getSlope(x, z);
       if (y > 0 && slope < 0.5) continue;
 
-      const rotY = this.rand01(cx, cz, 3 + i * 3) * Math.PI * 2;
-      const s01 = this.rand01(cx, cz, 4 + i * 3);
+      // Generate full random rotation using three independent random angles
+      const rotX = this.rand01(cx, cz, 3 + i * 5) * Math.PI * 2;
+      const rotY = this.rand01(cx, cz, 4 + i * 5) * Math.PI * 2;
+      const rotZ = this.rand01(cx, cz, 5 + i * 5) * Math.PI * 2;
+      const quat = new Quaternion().setFromEuler(tmpEuler.set(rotX, rotY, rotZ));
+
+      const s01 = this.rand01(cx, cz, 6 + i * 5);
       const scale = this.minScale + (this.maxScale - this.minScale) * s01;
 
-      stones.push({ pos: new Vector3(x, y + STONE_ON_GROUND_OFFSET, z), rotY, scale });
+      stones.push({
+        pos: new Vector3(x, y + STONE_ON_GROUND_OFFSET, z),
+        rot: quat,
+        scale,
+      });
     }
 
     return { cx, cz, stones };
@@ -431,7 +443,7 @@ export class StonesManager {
         }
 
         const mesh = this.lodMeshes[targetBucket];
-        this.tmpQuat.setFromAxisAngle(new Vector3(0, 1, 0), inst.rotY);
+        this.tmpQuat.copy(inst.rot);
         this.tmpScale.set(inst.scale, inst.scale, inst.scale);
         this.tmpMatrix.compose(inst.pos, this.tmpQuat, this.tmpScale);
         mesh.setMatrixAt(mesh.count, this.tmpMatrix);

@@ -22,7 +22,7 @@ export default class Water {
   constructor(private camera: PerspectiveCamera) {
     const uniformDistortionScale = { value: 1 };
     this.uniformDistortionScale = uniformDistortionScale;
-    const waterGeometry = getPlaneGeometry(30000, 30000);
+    const waterGeometry = getPlaneGeometry(30000, 30000, 40, 40);
     const reflector = new Reflector(waterGeometry, {
       textureWidth: 512,
       textureHeight: 512,
