@@ -17,7 +17,7 @@ import { remapClamp } from "../utils/math";
 
 // Per-level debug tint to visualize different grid sizes
 
-const GREEN = new Color(0.2, 0.8, 0);
+const GREEN = new Color(0.2, 1.5, 0);
 
 export class ProbeManager {
   // configuration
@@ -290,6 +290,7 @@ export class ProbeManager {
   }
 
   initQueue(cameraPos: Vector3) {
+    this.lastCameraCell.copy(cameraPos); // reuse vector for prev world pos
     this.writeQueue.length = 0;
     const config = this.sharedLayoutConfig;
     this.writeQueueSet.clear();
@@ -352,7 +353,7 @@ export class ProbeManager {
     // const tint = debugTints[Math.min(levelIndex, debugTints.length - 1)];
     // const irr = irrBase.multiply(tint).lerp(GREEN, inTheWoods);
     // const irr = irrBase;//.lerp(GREEN, inTheWoods * 0.25);
-    const irr = irrBase.lerp(GREEN, inTheWoods * 0.5);
+    const irr = irrBase.lerp(GREEN, inTheWoods * 0.75);
     irr.multiplyScalar(0.25);
 
     // Write 3 texels per probe using global flat 1D packing (row-major in atlas)

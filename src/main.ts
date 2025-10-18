@@ -28,11 +28,12 @@ import HemisphereAmbientMaterial from "./worldObjects/materials/HemisphereAmbien
 import { getSphereGeometry } from "./worldObjects/geometry/sphereGeometry";
 import { ProbeManager } from "./lighting/ProbeManager";
 import { makeTerrainMaterial } from "./terrain/materials";
+import { logTime } from "./utils/log";
 
 // 3D area container
 const view3d = document.createElement("div");
 document.body.appendChild(view3d);
-
+logTime("start");
 // js setup
 const renderer = new WebGLRenderer({ antialias: false, logarithmicDepthBuffer: true });
 
@@ -312,18 +313,30 @@ const prevCamPos = new Vector3().copy(camera.position);
 const camMove = new Vector3();
 scene.updateMatrix();
 
+logTime("ready to start rendering");
+
 setInterval(() => {
   const span = document.getElementById("cam-height");
   if (span) span.textContent = `${camera.position.y.toFixed(2)}`;
 }, 100);
+
+let frameCount = 0;
+const frameTimesToLog = 4;
 // Render loop
+const noop = () => {};
+const frameLogTime = (message: string) => logTime(`${frameCount}: ${message}`);
 function loop() {
+  frameCount++;
+  const logFrame = frameCount < frameTimesToLog || frameCount % 300 === 0;
+  const myLog = logFrame ? frameLogTime : noop;
+  myLog("loop cb start");
   const now = performance.now();
   const dt = Math.min(0.05, (now - lastTime) / 1000);
   uniformTime.value += dt;
   lastTime = now;
 
   // Update first-person controller
+  myLog("fpsController");
   firstPersonController.update(dt);
   // debugPlane.position.set(Math.random()*4-2,Math.random()*4-2,Math.random()*4-2); // x-right, y-down, z-forward (negative z is in front of camera)
   camera.updateMatrixWorld();
@@ -333,21 +346,19 @@ function loop() {
   terrainQuadtree.update(camera);
 
   // Update probes and push uniforms to terrain material
+  myLog("probeManager");
   probeManager.update(camera.position);
-  // Propagate probe atlas to terrain material
-  terrainMat.userData = terrainMat.userData || {};
-  // attach references for onBeforeCompile hook to read
-  terrainMat.userData.probeAtlas = probeManager.getAtlasTexture();
-  terrainMat.userData.probeShared = probeManager.getSharedLayoutConfig();
-  // terrainMat.needsUpdate = true
 
-  terrainRenderer.updateAndRender(camera, terrainQuadtree.getVisibleTiles());
+  myLog("terrainRenderer");
+  const visTiles = terrainQuadtree.getVisibleTiles();
+  terrainRenderer.updateAndRender(camera, visTiles);
 
   // Update camera matrices so attached HUD elements render correctly
   camera.updateMatrixWorld(true);
 
   // Make dirLight follow the camera
   {
+    myLog("dirLight");
     const offset = sunVector.clone().multiplyScalar(100);
     const lightPos = new Vector3().copy(camera.position).add(offset);
     dirLight.position.copy(lightPos);
@@ -373,6 +384,7 @@ function loop() {
   // Optionally also follow Y if desired:
   // skySphere.position.y = camera.position.y;
 
+  myLog("dirtyAABBs");
   const dirtyAABBs = terrainData.popDirtyAABBs();
   for (const layer of stonesLayers) {
     layer.update(camera, dirtyAABBs);
@@ -387,7 +399,9 @@ function loop() {
   renderer.clearColor();
   renderer.render(scene, camera);
   renderer.clearDepth();
+  myLog("oceanManager");
   oceanManager.update();
+  myLog("done");
   requestAnimationFrame(loop);
 }
 resize();

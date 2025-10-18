@@ -1,6 +1,7 @@
 import { BufferAttribute, BufferGeometry, Camera, Mesh, MeshStandardMaterial, Scene } from "three";
 import { TerrainData, TileCoords } from "./TerrainData";
 
+const maxTilesPerFrame = 40;
 type TileEntry = {
   mesh: Mesh;
   key: string;
@@ -15,15 +16,21 @@ export class TerrainRenderer {
     private material: MeshStandardMaterial
   ) {}
 
-  updateAndRender(camera: Camera, visible: TileCoords[]): void {
+  updateAndRender(camera: Camera, visibleTiles: TileCoords[]): void {
+    let tileCount = 0;
     const keep = new Set<string>();
-    for (const t of visible) {
+    visibleTiles.sort((a, b) => a.lod - b.lod);
+    for (const t of visibleTiles) {
       const key = `${t.tx}:${t.tz}:${t.lod}`;
       keep.add(key);
       if (!this.tiles.has(key)) {
         const mesh = this.buildTile(t);
         this.scene.add(mesh);
         this.tiles.set(key, { mesh, key });
+        tileCount++;
+      }
+      if (tileCount > maxTilesPerFrame) {
+        break;
       }
     }
     // Remove tiles no longer visible
@@ -108,7 +115,7 @@ export class TerrainRenderer {
     const normals: number[] = Array.from(baseNormals); // will expand as we add skirts
 
     // Add skirts to hide cracks: duplicate border vertices lowered downwards and copy normals
-    const skirtHeight = size * 0.1;
+    const skirtHeight = size * 0.1 + 10; //10 extra for pine trees
     const pushVertex = (
       wx: number,
       wy: number,
