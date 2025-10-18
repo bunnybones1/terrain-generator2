@@ -75,6 +75,7 @@ export class TerrainRenderer {
     const verts: number[] = [];
     const uvs: number[] = [];
     const pines: number[] = [];
+    const invAOAndMask: number[] = []; // x: invAO (1 is dark, 0 is bright), y: mask (always 0 for terrain)
     const indices: number[] = [];
     const useBaseForHighLod = t.lod < 1;
     // const useBaseForHighLod = false;
@@ -94,7 +95,9 @@ export class TerrainRenderer {
         const lx = fx * size - half;
         const lz = fz * size - half;
         verts.push(lx, wy, lz);
-        pines.push(useBaseForHighLod ? 0 : (terrainSample.pine ?? 0));
+        pines.push(useBaseForHighLod ? 0 : terrainSample.pine);
+        // x: invAO from pineWindow (or 0 at high LOD), y: mask=0
+        invAOAndMask.push(useBaseForHighLod ? terrainSample.pineWindow : 0, 0);
         // World-space UVs: 1.0 UV = 4 meters in world space
         uvs.push(wx / 4.0, wz / 4.0);
       }
@@ -132,12 +135,15 @@ export class TerrainRenderer {
       nx: number,
       ny: number,
       nz: number,
-      pineVal: number
+      pineVal: number,
+      invAOVal: number,
+      maskVal: number
     ) => {
       verts.push(wx, wy, wz);
       uvs.push(u, v);
       normals.push(nx, ny, nz);
       pines.push(pineVal);
+      invAOAndMask.push(invAOVal, maskVal);
       return verts.length / 3 - 1;
     };
 
@@ -190,7 +196,9 @@ export class TerrainRenderer {
           n0x,
           n0y,
           n0z,
-          pines[i0]
+          pines[i0],
+          invAOAndMask[i0 * 2 + 0],
+          0
         );
         const s1 = pushVertex(
           lx1,
@@ -201,7 +209,9 @@ export class TerrainRenderer {
           n1x,
           n1y,
           n1z,
-          pines[i1]
+          pines[i1],
+          invAOAndMask[i1 * 2 + 0],
+          0
         );
 
         // Two triangles forming quad. Depending on edge direction, flip winding to keep outward facing.
@@ -228,6 +238,7 @@ export class TerrainRenderer {
     geo.setAttribute("uv", new BufferAttribute(new Float32Array(uvs), 2));
     geo.setAttribute("normal", new BufferAttribute(new Float32Array(normals), 3));
     geo.setAttribute("pine", new BufferAttribute(new Float32Array(pines), 1));
+    geo.setAttribute("invAOAndMask", new BufferAttribute(new Float32Array(invAOAndMask), 2));
     geo.setIndex(indices);
 
     // Slope can be derived from normals in shader; no need to store as attribute

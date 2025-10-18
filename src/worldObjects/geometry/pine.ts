@@ -190,17 +190,77 @@ export function buildPineLODGeometries(
 
     // Build 'pine' attribute arrays matching each sub-geometry before merge
     const pineAttrs: BufferAttribute[] = [];
-    const trunkPos = trunk.getAttribute("position");
+    const invAOAndMaskAttrs: BufferAttribute[] = [];
+    const trunkPos = trunk.getAttribute("position") as BufferAttribute;
+    if (!trunk.getAttribute("normal")) {
+      trunk.computeVertexNormals();
+    }
+    const trunkNorm = trunk.getAttribute("normal") as BufferAttribute;
+
+    // Prepare invAOAndMask: x = invAO based on vertex Y, y = mask (0 for trunk)
+    const trunkInvAOAndMask = new Float32Array(trunkPos.count * 2);
+    const noiseAmp = Math.max(0.002, baseRadius * 0.15); // subtle bark irregularity
+    const noiseFreq = 2.0 / Math.max(0.1, baseRadius); // scale with thickness
+    const octaves = 3;
+    const lac = 2.0;
+    const gain = 0.5;
+
+    for (let vi = 0; vi < trunkPos.count; vi++) {
+      const x = trunkPos.getX(vi);
+      const y = trunkPos.getY(vi);
+      const z = trunkPos.getZ(vi);
+
+      // Multi-octave fbm noise
+      let f = noiseFreq;
+      let a = 1.0;
+      let sum = 0.0;
+      let ampSum = 0.0;
+      for (let o = 0; o < octaves; o++) {
+        const n = simplex(x * f, y * f, z * f); // -1..1
+        sum += (n * 0.5 + 0.5) * a; // 0..1
+        ampSum += a;
+        f *= lac;
+        a *= gain;
+      }
+      const fbm = ampSum > 0.0 ? sum / ampSum : 0.0;
+
+      // Displace along normal
+      const nx = trunkNorm.getX(vi);
+      const ny = trunkNorm.getY(vi);
+      const nz = trunkNorm.getZ(vi);
+      const push = noiseAmp * (fbm - 0.5); // center around 0
+      trunkPos.setXYZ(vi, x + nx * push, y + ny * push, z + nz * push);
+
+      // invAO from normalized Y within trunk height (0 at base, 1 at top)
+      const tY = Math.min(1, Math.max(0, (y - 0.0) / trunkHeight));
+      trunkInvAOAndMask[vi * 2 + 0] = tY; // x: AO
+      trunkInvAOAndMask[vi * 2 + 1] = 0.0; // y: mask=0 for trunk
+    }
+    trunkPos.needsUpdate = true;
+    trunk.computeVertexNormals();
+
     pineAttrs.push(new BufferAttribute(new Float32Array(trunkPos.count).fill(0), 1));
+    invAOAndMaskAttrs.push(new BufferAttribute(trunkInvAOAndMask, 2));
     for (const cone of foliageParts) {
       const conePos = cone.getAttribute("position");
       pineAttrs.push(new BufferAttribute(new Float32Array(conePos.count).fill(1), 1));
+      // cones: AO=0, mask=1
+      {
+        const arr = new Float32Array(conePos.count * 2);
+        for (let vi = 0; vi < conePos.count; vi++) {
+          arr[vi * 2 + 0] = 0.0; // invAO
+          arr[vi * 2 + 1] = 1.0; // mask = 1 for cones
+        }
+        invAOAndMaskAttrs.push(new BufferAttribute(arr, 2));
+      }
     }
 
     // Attach attributes to sub-geometries so mergeGeometries merges them
     trunk.setAttribute("pine", pineAttrs[0]);
+    trunk.setAttribute("invAOAndMask", invAOAndMaskAttrs[0]);
     for (let idx = 0; idx < foliageParts.length; idx++) {
       foliageParts[idx].setAttribute("pine", pineAttrs[idx + 1]);
+      foliageParts[idx].setAttribute("invAOAndMask", invAOAndMaskAttrs[idx + 1]);
     }
 
     const merged = BufferGeometryUtils.mergeGeometries([trunk, ...foliageParts], true);

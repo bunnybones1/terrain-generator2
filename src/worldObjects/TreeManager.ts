@@ -3,6 +3,7 @@ import {
   BufferGeometry,
   Frustum,
   InstancedMesh,
+  InstancedBufferAttribute,
   Matrix4,
   Matrix4 as TMatrix4,
   MeshStandardMaterial,
@@ -28,6 +29,7 @@ type TreeInstance = {
   pos: Vector3;
   rot: Quaternion;
   scale: number;
+  ao: number;
 };
 
 type Cell = {
@@ -125,6 +127,13 @@ export class TreeManager {
         g.boundingBox.max.set(half, maxHeight, half);
       }
 
+      // Allocate per-instance AO attribute (float), initialized to 0
+      const capacity = this.lodCapacities[i];
+      const aoArray = new Float32Array(capacity);
+      const instanceInvAO = new InstancedBufferAttribute(aoArray, 1);
+      instanceInvAO.setUsage(35048); // DynamicDrawUsage
+      mesh.geometry.setAttribute("instanceInvAO", instanceInvAO);
+
       this.scene.add(mesh);
       return mesh;
     });
@@ -210,6 +219,7 @@ export class TreeManager {
           pos: new Vector3(fx, y, fz),
           rot: quat,
           scale: pine,
+          ao: pineWindow,
         });
       }
     }
@@ -414,6 +424,15 @@ export class TreeManager {
         this.tmpScale.set(inst.scale, inst.scale, inst.scale);
         this.tmpMatrix.compose(inst.pos, this.tmpQuat, this.tmpScale);
         mesh.setMatrixAt(mesh.count, this.tmpMatrix);
+
+        // Write per-instance AO
+        const aoAttr = mesh.geometry.getAttribute("instanceInvAO") as
+          | InstancedBufferAttribute
+          | undefined;
+        if (aoAttr) {
+          (aoAttr.array as Float32Array)[mesh.count] = inst.ao ?? 0;
+        }
+
         mesh.count++;
         placed++;
       }
@@ -421,6 +440,10 @@ export class TreeManager {
 
     for (const mesh of this.lodMeshes) {
       mesh.instanceMatrix.needsUpdate = true;
+      const aoAttr = mesh.geometry.getAttribute("instanceInvAO") as
+        | InstancedBufferAttribute
+        | undefined;
+      if (aoAttr) aoAttr.needsUpdate = true;
     }
   }
 }
