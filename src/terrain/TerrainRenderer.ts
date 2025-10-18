@@ -78,15 +78,22 @@ export class TerrainRenderer {
     const indices: number[] = [];
     const useBaseForHighLod = t.lod < 1;
     // const useBaseForHighLod = false;
+    const half = size * 0.5;
+    const cx = x + half;
+    const cz = z + half;
     for (let j = 0; j < res; j++) {
       for (let i = 0; i < res; i++) {
         const fx = i / (res - 1);
         const fz = j / (res - 1);
+        // World coordinates for sampling
         const wx = x + fx * size;
         const wz = z + fz * size;
         const terrainSample = this.data.getSample(wx, wz);
         const wy = useBaseForHighLod ? terrainSample.baseHeight : terrainSample.height;
-        verts.push(wx, wy, wz);
+        // Tile-local, centered XZ
+        const lx = fx * size - half;
+        const lz = fz * size - half;
+        verts.push(lx, wy, lz);
         pines.push(useBaseForHighLod ? 0 : (terrainSample.pine ?? 0));
         // World-space UVs: 1.0 UV = 4 meters in world space
         uvs.push(wx / 4.0, wz / 4.0);
@@ -115,7 +122,7 @@ export class TerrainRenderer {
     const normals: number[] = Array.from(baseNormals); // will expand as we add skirts
 
     // Add skirts to hide cracks: duplicate border vertices lowered downwards and copy normals
-    const skirtHeight = size * 0.1 + 10; //10 extra for pine trees
+    const skirtHeight = size * 0.1 + (t.lod === 2 ? 10 : 0); //10 extra for pine trees
     const pushVertex = (
       wx: number,
       wy: number,
@@ -153,12 +160,12 @@ export class TerrainRenderer {
       for (let k = 0; k < edge.length - 1; k++) {
         const i0 = edge[k];
         const i1 = edge[k + 1];
-        const x0 = verts[i0 * 3 + 0],
+        const lx0 = verts[i0 * 3 + 0],
           y0 = verts[i0 * 3 + 1],
-          z0 = verts[i0 * 3 + 2];
-        const x1 = verts[i1 * 3 + 0],
+          lz0 = verts[i0 * 3 + 2];
+        const lx1 = verts[i1 * 3 + 0],
           y1 = verts[i1 * 3 + 1],
-          z1 = verts[i1 * 3 + 2];
+          lz1 = verts[i1 * 3 + 2];
 
         const n0x = normals[i0 * 3 + 0],
           n0y = normals[i0 * 3 + 1],
@@ -167,24 +174,30 @@ export class TerrainRenderer {
           n1y = normals[i1 * 3 + 1],
           n1z = normals[i1 * 3 + 2];
 
+        // Convert local centered coords to world for UVs: add tile center
+        const wx0 = cx + lx0;
+        const wz0 = cz + lz0;
+        const wx1 = cx + lx1;
+        const wz1 = cz + lz1;
+
         // Recompute UVs from world coordinates for skirts as well (1 UV = 4 meters)
         const s0 = pushVertex(
-          x0,
+          lx0,
           y0 - skirtHeight,
-          z0,
-          x0 / 4.0,
-          z0 / 4.0,
+          lz0,
+          wx0 / 4.0,
+          wz0 / 4.0,
           n0x,
           n0y,
           n0z,
           pines[i0]
         );
         const s1 = pushVertex(
-          x1,
+          lx1,
           y1 - skirtHeight,
-          z1,
-          x1 / 4.0,
-          z1 / 4.0,
+          lz1,
+          wx1 / 4.0,
+          wz1 / 4.0,
           n1x,
           n1y,
           n1z,
@@ -220,6 +233,9 @@ export class TerrainRenderer {
     // Slope can be derived from normals in shader; no need to store as attribute
 
     const mesh = new Mesh(geo, this.material);
+    // Place mesh at the tile center so local vertices cluster around origin
+    mesh.position.set(cx, 0, cz);
+    mesh.updateMatrixWorld();
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     return mesh;

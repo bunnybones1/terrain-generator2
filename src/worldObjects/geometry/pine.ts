@@ -118,11 +118,18 @@ export function buildPineLODGeometries(
     // progressively coarser with fewer foliage sections
     const segs = Math.max(6, 16 - i * 3);
     const trunkRadius = Math.max(0.05, baseRadius * 0.15);
-    const trunkHeight = baseHeight * 0.4;
+    const trunkHeight = baseHeight * 0.45;
     const foliageHeight = baseHeight - trunkHeight;
 
     // Trunk
-    const trunk = new CylinderGeometry(trunkRadius * 0.8, trunkRadius, trunkHeight, segs, 1, true);
+    const trunk = new CylinderGeometry(
+      trunkRadius * 0.8,
+      trunkRadius,
+      trunkHeight,
+      segs,
+      segs,
+      true
+    );
     const tMat = new Matrix4().makeTranslation(0, trunkHeight * 0.5, 0);
     trunk.applyMatrix4(tMat);
     {

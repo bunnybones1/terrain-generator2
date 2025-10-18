@@ -127,6 +127,7 @@ export default class Water {
     const refractor = new Refractor(waterGeometry, {
       textureWidth: 512,
       textureHeight: 512,
+      // clipBias: 0.01
     });
 
     refractor.position.y = 0.9 / 16;
@@ -169,7 +170,7 @@ export default class Water {
       this.visuals.rotation.x = Math.PI * playerWaterSide;
       this.refractor.rotation.x = Math.PI * playerWaterSide;
       this.refractor.position.y = (1 + playerWaterSide * 0.2) / 16;
-      this.uniformDistortionScale.value = newPlayerWaterSide === -1 ? 100 : 5;
+      this.uniformDistortionScale.value = newPlayerWaterSide === -1 ? 50 : 5;
     }
     this.visuals.position.x = this.camera.position.x;
     this.visuals.position.z = this.camera.position.z;

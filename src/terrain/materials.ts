@@ -1,6 +1,7 @@
-import { Vector2, MeshStandardMaterial, Color, Vector3, Vector4 } from "three";
+import { Vector2, MeshStandardMaterial, Color, Vector3, Vector4, AdditiveBlending } from "three";
 import { loadTex } from "./loadTex";
 import { ProbeManager } from "../lighting/ProbeManager";
+import { OVERDRAW_TEST } from "../overrides";
 
 export function makeTerrainMaterial(cameraPosition: Vector3, probeManager: ProbeManager) {
   // Textures
@@ -24,6 +25,14 @@ export function makeTerrainMaterial(cameraPosition: Vector3, probeManager: Probe
     // wireframe: true,
   });
 
+  // Make material additive and transparent in overdraw mode
+  if (OVERDRAW_TEST) {
+    // mat.transparent = true;
+    mat.blending = AdditiveBlending;
+    mat.depthTest = true;
+    mat.depthWrite = true;
+  }
+
   const tiling = new Vector2(1, 1);
   if (mat.map) {
     mat.map.repeat.copy(tiling);
@@ -31,6 +40,12 @@ export function makeTerrainMaterial(cameraPosition: Vector3, probeManager: Probe
   }
 
   mat.onBeforeCompile = (shader) => {
+    // Inject define for overdraw test
+    shader.defines = shader.defines || {};
+    if (OVERDRAW_TEST) {
+      shader.defines.OVERDRAW_TEST = 1;
+    }
+
     // Packed uniforms
     shader.uniforms.uRock = { value: rockTex };
     shader.uniforms.uSnow = { value: snowTex };
@@ -620,6 +635,12 @@ export function makeTerrainMaterial(cameraPosition: Vector3, probeManager: Probe
           // gl_FragColor.rgb = mapN * 0.5 + 0.5;
 
           // normal = normalize( tbn * mapN );
+
+        #ifdef OVERDRAW_TEST
+          // Output a dark gray to visualize overdraw, with additive blending
+          gl_FragColor.rgb = vec3(0.1);
+          gl_FragColor.a = 1.0;
+        #endif
         `
       );
   };

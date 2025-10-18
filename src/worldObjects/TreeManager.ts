@@ -103,6 +103,7 @@ export class TreeManager {
       const mesh = new InstancedMesh(g, this.material, this.lodCapacities[i]);
       mesh.count = 0;
       mesh.instanceMatrix.setUsage(35048);
+      mesh.renderOrder = -1;
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.frustumCulled = false;
@@ -356,6 +357,16 @@ export class TreeManager {
     let saturatedLogged = false;
 
     for (const cell of sortedCells) {
+      // Sort trees by ascending squared distance to camera in world space
+      cell.trees.sort((a, b) => {
+        const dax = a.pos.x - camera.position.x;
+        const daz = a.pos.z - camera.position.z;
+        const dbx = b.pos.x - camera.position.x;
+        const dbz = b.pos.z - camera.position.z;
+        const da2 = dax * dax + daz * daz;
+        const db2 = dbx * dbx + dbz * dbz;
+        return da2 - db2;
+      });
       for (const inst of cell.trees) {
         if (this.globalMaxInstances > 0 && placed >= this.globalMaxInstances) {
           if (!saturatedLogged) {

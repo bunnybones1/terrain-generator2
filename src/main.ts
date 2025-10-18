@@ -29,6 +29,7 @@ import { getSphereGeometry } from "./worldObjects/geometry/sphereGeometry";
 import { ProbeManager } from "./lighting/ProbeManager";
 import { makeTerrainMaterial } from "./terrain/materials";
 import { logTime } from "./utils/log";
+import { OVERDRAW_TEST } from "./overrides";
 
 // 3D area container
 const view3d = document.createElement("div");
@@ -52,7 +53,7 @@ const scene = new Scene();
 
 scene.matrixAutoUpdate = false;
 scene.matrixWorldAutoUpdate = false;
-scene.background = new Color(0x87ceeb); // Sky blue
+scene.background = new Color(OVERDRAW_TEST ? 0x000000 : 0x87ceeb);
 
 const camera = new PerspectiveCamera(
   75,
@@ -240,7 +241,9 @@ bgScene.add(cloudPlane);
 
 const envMaker = new PMREMGenerator(renderer);
 const envMap = envMaker.fromScene(bgScene, 0.0075);
-scene.background = envMap.texture;
+if (!OVERDRAW_TEST) {
+  scene.background = envMap.texture;
+}
 
 // Timekeeping
 let lastTime = performance.now();
