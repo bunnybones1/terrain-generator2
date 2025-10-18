@@ -256,6 +256,11 @@ scene.add(waterSphere);
 // Timekeeping
 let lastTime = performance.now();
 
+// FPS tracking DOM and state
+let fpsFrameCount = 0;
+let fpsLastTime = performance.now();
+const fpsElement = document.getElementById("fps-counter");
+
 const firstPersonController = new FirstPersonController(
   camera,
   terrainSampler,
@@ -400,10 +405,23 @@ const noop = () => {};
 const frameLogTime = (message: string) => logTime(`${frameCount}: ${message}`);
 function loop() {
   frameCount++;
+  fpsFrameCount++;
   const logFrame = frameCount < frameTimesToLog || frameCount % 300 === 0;
   const myLog = logFrame ? frameLogTime : noop;
   myLog("loop cb start");
   const now = performance.now();
+
+  // Update FPS once per second
+  if (now - fpsLastTime >= 1000) {
+    const elapsed = now - fpsLastTime;
+    const fps = Math.round((fpsFrameCount * 1000) / elapsed);
+    if (fpsElement) {
+      fpsElement.textContent = `${fps} FPS`;
+    }
+    fpsFrameCount = 0;
+    fpsLastTime = now;
+  }
+
   const dt = Math.min(0.05, (now - lastTime) / 1000);
   uniformTime.value += dt;
   lastTime = now;
