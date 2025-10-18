@@ -35,7 +35,7 @@ export function makeTerrainMaterial(
     metalness: 0,
     roughness: 0.6,
     envMap: envMap,
-    envMapIntensity: 0.007,
+    envMapIntensity: 0.2,
     // wireframe: true,
   });
 
@@ -521,6 +521,20 @@ export function makeTerrainMaterial(
         #endif`
       )
       .replace(
+        `#include <lights_physical_fragment>`,
+        `
+
+        vec3 camPosF = cameraPosition;
+        vec3 toFragF = vWorldPos - camPosF;
+        float dist = length(toFragF);
+
+        roughnessFactor = mix(roughnessFactor, 0.2, tSand);
+        // specularIntensity = mix(specularIntensity, 0.3, tSand);
+        roughnessFactor = mix(roughnessFactor, 0.4, tSnow);
+        roughnessFactor = mix(roughnessFactor, 1.0, pineAmt);
+        #include <lights_physical_fragment>`
+      )
+      .replace(
         `#include <lights_fragment_begin>`,
         `
         #include <lights_fragment_begin>
@@ -535,19 +549,24 @@ export function makeTerrainMaterial(
         #endif
         `
       )
-      // .replace(
-      //   `#include <lights_fragment_end>`,
-      //   `
-      //   #include <lights_fragment_end>
+      .replace(
+        `#include <lights_fragment_end>`,
+        `
+        #include <lights_fragment_end>
 
-      //   // Indirect lighting from probe atlas
-      //   // vec3 probePos = vWorldPos;
-      //   vec3 probePos = vWorldPos + (vWorldNormal + mapN) * 4.0;
-      //   vec3 irr = sampleIndirectIrradiance(probePos);
-      //   irradiance += irr;
-      //   // reflectedLight.indirectDiffuse += irr;
-      //   `
-      // )
+
+        // // Indirect lighting from probe atlas
+        // // vec3 probePos = vWorldPos;
+        // vec3 probePos = vWorldPos + (vWorldNormal + mapN) * 4.0;
+        // vec3 irr = sampleIndirectIrradiance(probePos);
+        // irradiance += irr;
+        // // reflectedLight.indirectDiffuse += irr;
+        vec3 sandSpec = vec3(mix(1.0, 10.0/dist, tSand));
+        reflectedLight.directSpecular *= sandSpec;
+        reflectedLight.indirectSpecular *= sandSpec;
+
+        `
+      )
       .replace(
         "#include <fog_fragment>",
         `
@@ -616,9 +635,6 @@ export function makeTerrainMaterial(
         vec3 inScattering = waterBackscatter(uWaterScatterPack.xyz, attenColor, waterSeg);
 
 
-        vec3 camPosF = cameraPosition;
-        vec3 toFragF = vWorldPos - camPosF;
-        float dist = length(toFragF);
         vec3 dirF = (dist > 0.0) ? toFragF / dist : vec3(0.0);
 
         bool camAbove = camPosF.y >= uWaterAbsorbPack.x;
