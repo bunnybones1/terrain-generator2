@@ -141,6 +141,9 @@ export function makeTerrainMaterial(
         // Pine tint varying from geometry attribute
         attribute float pine;
         varying float vPine;
+        // Inverse ambient occlusion attribute (0..1), provided by geometry
+        attribute float invAO;
+        varying float vInvAO;
         `
       )
       .replace(
@@ -163,10 +166,10 @@ export function makeTerrainMaterial(
         vec3 nWorld = normalize((objToWorld * vec4(nObj, 0.0)).xyz);
         vWorldNormal = nWorld;
 
-        // Pass pine attribute (0..1), default to 0 if attribute not provided
-        #ifdef GL_OES_standard_derivatives
-        #endif
+        // Pass pine attribute (0..1)
         vPine = pine;
+        // Pass inverse AO attribute
+        vInvAO = invAO;
         `
       );
 
@@ -176,6 +179,7 @@ export function makeTerrainMaterial(
         `
         #include <common>
         varying float vPine;
+        varying float vInvAO;
         uniform sampler2D uRock;
         uniform sampler2D uSnow;
         uniform sampler2D uSand;
@@ -562,8 +566,14 @@ export function makeTerrainMaterial(
         // irradiance += irr;
         // // reflectedLight.indirectDiffuse += irr;
         vec3 sandSpec = vec3(mix(1.0, 10.0/dist, tSand));
-        reflectedLight.directSpecular *= sandSpec;
-        reflectedLight.indirectSpecular *= sandSpec;
+        float ao = 1.0-vInvAO;
+        float ao2 = ao*ao;
+        float aoCustom = ao2 * 0.75 + 0.12;
+        vec3 aoGreen = vec3(mix(ao, aoCustom, 0.5), aoCustom, ao);
+        reflectedLight.directDiffuse *= aoGreen;
+        reflectedLight.indirectDiffuse *= aoGreen;
+        reflectedLight.directSpecular *= sandSpec * aoGreen;
+        reflectedLight.indirectSpecular *= sandSpec * aoGreen;
 
         `
       )
