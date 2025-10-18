@@ -1,6 +1,4 @@
 import {
-  Scene,
-  WebGLRenderer,
   Vector3,
   DataTexture,
   RGBAFormat,
@@ -8,8 +6,6 @@ import {
   ClampToEdgeWrapping,
   NearestFilter,
   Color,
-  PerspectiveCamera,
-  WebGLRenderTarget,
   Texture,
 } from "three";
 import { TerrainData } from "../terrain/TerrainData";
@@ -36,11 +32,7 @@ export class ProbeManager {
     baseSpacing: 1,
   };
 
-  private scene: Scene;
-  private renderer: WebGLRenderer;
   private terrainData: TerrainData;
-  private tempCam: PerspectiveCamera;
-  private quadRT: WebGLRenderTarget;
   private writeQueue: { wx: number; wy: number; wz: number; li: number; d2: number }[] = [];
   private writeQueueSet: Set<string> = new Set();
   private lastCameraCell = new Vector3();
@@ -57,9 +49,7 @@ export class ProbeManager {
   // private hemiBottom = new Color(0.4, 0.25, 0.1);
   private hemiBottom = new Color(0.1, 0.0625, 0.025);
 
-  constructor(scene: Scene, renderer: WebGLRenderer, terrainData: TerrainData) {
-    this.scene = scene;
-    this.renderer = renderer;
+  constructor(terrainData: TerrainData) {
     this.terrainData = terrainData;
 
     const config = this.sharedLayoutConfig;
@@ -98,10 +88,6 @@ export class ProbeManager {
         ).toFixed(1)}% used)`
       );
     }
-
-    // Temp camera and RT for sampling (not used heavily in mock)
-    this.tempCam = new PerspectiveCamera(90, 1, 0.1, this.maxDistance);
-    this.quadRT = new WebGLRenderTarget(64, 64);
   }
 
   getAtlasTexture(): Texture {
@@ -296,6 +282,7 @@ export class ProbeManager {
     this.writeQueueSet.clear();
     for (let li = 0; li < config.totalLevels; li++) {
       const spacing = config.baseSpacing * Math.pow(2, li);
+      const tolerance = spacing * 2;
 
       // Use radius based on maxDistance for all levels; wrapping will map into ring buffer
       const extent = this.maxDistance * Math.pow(2, li);
@@ -320,8 +307,8 @@ export class ProbeManager {
               const wz = cz + dz * spacing;
 
               // Skip if terrain height at (wx,wz) is not within grid size of probe Y
-              const terrainH = this.terrainData.getBaseHeightApprox(wx, wz);
-              if (Math.abs(terrainH - wy) > spacing) continue;
+              const terrainH = this.terrainData.getBaseHeight(wx, wz);
+              if (Math.abs(terrainH - wy) > tolerance) continue;
 
               this.enqueueProbe(wx, wy, wz, li, cameraPos);
             }
@@ -329,6 +316,7 @@ export class ProbeManager {
         }
       }
     }
+    console.log(`initial probe queue: ${this.writeQueue.length}`);
   }
 
   // Bake a single probe irradiance and write to atlas

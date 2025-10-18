@@ -1,6 +1,5 @@
 import { Object3D, PerspectiveCamera, Raycaster, Vector2, Vector3, WebGLRenderer } from "three";
 import { TerrainSampler } from "./terrain/TerrainSampler";
-import { findIslandSpawn } from "./findIslandSpawn";
 import { TerrainRenderer } from "./terrain/TerrainRenderer";
 import { TerrainData } from "./terrain/TerrainData";
 
@@ -54,7 +53,6 @@ export default class FirstPersonController {
     private camera: PerspectiveCamera,
     private terrainSampler: TerrainSampler,
     renderer: WebGLRenderer,
-    spawnSeed: number,
     private terrainRenderer: TerrainRenderer,
     private terrainData: TerrainData
   ) {
@@ -116,17 +114,18 @@ export default class FirstPersonController {
         this.isDigging = false;
       }
     });
+  }
 
+  setLocation(x: number, z: number, angle: number) {
     // Use island spawn to set initial camera position at shoreline and yaw
-    const spawn = findIslandSpawn(terrainSampler.data, spawnSeed);
-    camera.position.x = spawn.x;
-    camera.position.z = spawn.z;
+    this.camera.position.x = x;
+    this.camera.position.z = z;
     // Initialize yaw so camera faces the sea from spawn
     // Our convention: yaw rotates around Y, forward vector is (0,0,-1) at yaw=0; to face (dx,dz), yaw = atan2(dx, -dz)
-    this.yaw = spawn.angle + Math.PI * 0.5;
+    this.yaw = angle;
     // height should be very close to 0; use sampler for consistency and add a small offset
-    const groundH0 = terrainSampler.getSample(spawn.x, spawn.z).baseHeight + initialHeight;
-    camera.position.y = Math.max(0, groundH0) + this.eyeHeight + 0.5;
+    const groundH0 = this.terrainSampler.getSample(x, z).baseHeight + initialHeight;
+    this.camera.position.y = Math.max(0, groundH0) + this.eyeHeight + 0.5;
 
     // Initialize smoothed position
     this.smoothedPos.copy(this.camera.position);
