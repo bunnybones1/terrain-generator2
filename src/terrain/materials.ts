@@ -1,9 +1,21 @@
-import { Vector2, MeshStandardMaterial, Color, Vector3, Vector4, AdditiveBlending } from "three";
+import {
+  Vector2,
+  MeshStandardMaterial,
+  Color,
+  Vector3,
+  Vector4,
+  AdditiveBlending,
+  Texture,
+} from "three";
 import { loadTex } from "./loadTex";
 import { ProbeManager } from "../lighting/ProbeManager";
 import { OVERDRAW_TEST } from "../overrides";
 
-export function makeTerrainMaterial(cameraPosition: Vector3, probeManager?: ProbeManager) {
+export function makeTerrainMaterial(
+  cameraPosition: Vector3,
+  envMap?: Texture,
+  probeManager?: ProbeManager
+) {
   // Textures
   const grassTex = loadTex("textures/grass.png");
   const rockTex = loadTex("textures/rocks.png");
@@ -20,8 +32,10 @@ export function makeTerrainMaterial(cameraPosition: Vector3, probeManager?: Prob
   const mat = new MeshStandardMaterial({
     map: grassTex,
     normalMap: grassNormalsTex,
-    metalness: 0.0,
-    roughness: 0.8,
+    metalness: 0,
+    roughness: 0.6,
+    envMap: envMap,
+    envMapIntensity: 0.007,
     // wireframe: true,
   });
 

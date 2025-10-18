@@ -52,11 +52,46 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = 2;
 view3d.appendChild(renderer.domElement);
 
+const sunVector = new Vector3(-1, 1, 1);
+
+const worldColorTop = new Color(0.3, 0.5, 1);
+const worldColorBottom = new Color(0.4, 0.25, 0.1);
+
+const bgScene = new Scene();
+const sunBall = new Mesh(
+  new CircleGeometry(0.5, 32),
+  new MeshBasicMaterial({
+    color: new Color(1000, 900, 600),
+    side: DoubleSide,
+  })
+);
+sunBall.position.copy(sunVector).normalize().multiplyScalar(9);
+sunBall.lookAt(new Vector3());
+bgScene.add(sunBall);
+const bgSphere = new Mesh(
+  getSphereGeometry(1, 16, 64),
+  new HemisphereAmbientMaterial(worldColorTop, worldColorBottom)
+);
+bgSphere.scale.setScalar(10);
+bgScene.add(bgSphere);
+const cloudPlane = new Mesh(getPlaneGeometry(1, 1), new CloudPlaneMaterial());
+cloudPlane.scale.setScalar(10);
+cloudPlane.position.y = 0.1;
+cloudPlane.rotation.x = Math.PI * 0.5;
+bgScene.add(cloudPlane);
+
+const envMaker = new PMREMGenerator(renderer);
+const envMap = envMaker.fromScene(bgScene, 0.0075);
+
 const scene = new Scene();
+if (OVERDRAW_TEST) {
+  scene.background = new Color(0x000000);
+} else {
+  scene.background = envMap.texture;
+}
 
 scene.matrixAutoUpdate = false;
 scene.matrixWorldAutoUpdate = false;
-scene.background = new Color(OVERDRAW_TEST ? 0x000000 : 0x87ceeb);
 
 const camera = new PerspectiveCamera(
   75,
@@ -174,6 +209,7 @@ debugPlane.updateMatrix();
 
 const terrainMat = makeTerrainMaterial(
   camera.position,
+  AMBIENT_LIGHT_MODE === "envmap" ? envMap.texture : undefined,
   AMBIENT_LIGHT_MODE === "probes" ? probeManager : undefined
 );
 const terrainRenderer = new TerrainRenderer(terrainData, scene, terrainMat);
@@ -216,40 +252,6 @@ waterSphere.frustumCulled = false;
 waterSphere.renderOrder = 10;
 waterSphere.position.set(0, 0, 0);
 scene.add(waterSphere);
-
-const sunVector = new Vector3(-1, 1, 1);
-
-const worldColorTop = new Color(0.3, 0.5, 1);
-const worldColorBottom = new Color(0.4, 0.25, 0.1);
-
-const bgScene = new Scene();
-const sunBall = new Mesh(
-  new CircleGeometry(0.5, 32),
-  new MeshBasicMaterial({
-    color: new Color(10, 9, 6),
-    side: DoubleSide,
-  })
-);
-sunBall.position.copy(sunVector).normalize().multiplyScalar(9);
-sunBall.lookAt(new Vector3());
-bgScene.add(sunBall);
-const bgSphere = new Mesh(
-  getSphereGeometry(1, 16, 64),
-  new HemisphereAmbientMaterial(worldColorTop, worldColorBottom)
-);
-bgSphere.scale.setScalar(10);
-bgScene.add(bgSphere);
-const cloudPlane = new Mesh(getPlaneGeometry(1, 1), new CloudPlaneMaterial());
-cloudPlane.scale.setScalar(10);
-cloudPlane.position.y = 0.1;
-cloudPlane.rotation.x = Math.PI * 0.5;
-bgScene.add(cloudPlane);
-
-const envMaker = new PMREMGenerator(renderer);
-const envMap = envMaker.fromScene(bgScene, 0.0075);
-if (!OVERDRAW_TEST) {
-  scene.background = envMap.texture;
-}
 
 // Timekeeping
 let lastTime = performance.now();
@@ -322,7 +324,7 @@ setInterval(() => {
 }, 4000);
 
 if (AMBIENT_LIGHT_MODE === "hemi") {
-  scene.add(new HemisphereLight(0xcceeff, 0x776644, 0.1));
+  scene.add(new HemisphereLight(0xcceeff, 0x776644, 0.15));
 } else if (AMBIENT_LIGHT_MODE === "probes") {
   probeManager.initQueue(camera.position);
 }
