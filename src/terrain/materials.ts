@@ -3,7 +3,7 @@ import { loadTex } from "./loadTex";
 import { ProbeManager } from "../lighting/ProbeManager";
 import { OVERDRAW_TEST } from "../overrides";
 
-export function makeTerrainMaterial(cameraPosition: Vector3, probeManager: ProbeManager) {
+export function makeTerrainMaterial(cameraPosition: Vector3, probeManager?: ProbeManager) {
   // Textures
   const grassTex = loadTex("textures/grass.png");
   const rockTex = loadTex("textures/rocks.png");
@@ -44,6 +44,11 @@ export function makeTerrainMaterial(cameraPosition: Vector3, probeManager: Probe
     shader.defines = shader.defines || {};
     if (OVERDRAW_TEST) {
       shader.defines.OVERDRAW_TEST = 1;
+    }
+
+    // Enable probe usage only when probeManager exists
+    if (probeManager) {
+      shader.defines.USE_PROBES = 1;
     }
 
     // Packed uniforms
@@ -104,10 +109,12 @@ export function makeTerrainMaterial(cameraPosition: Vector3, probeManager: Probe
       value: cameraPosition,
     };
 
-    shader.uniforms.uProbeAtlas = { value: probeManager.getAtlasTexture() };
-    shader.uniforms.uProbeShared = {
-      value: probeManager.getSharedLayoutConfig(),
-    };
+    if (probeManager) {
+      shader.uniforms.uProbeAtlas = { value: probeManager.getAtlasTexture() };
+      shader.uniforms.uProbeShared = {
+        value: probeManager.getSharedLayoutConfig(),
+      };
+    }
 
     shader.vertexShader = shader.vertexShader
       .replace(
@@ -504,12 +511,14 @@ export function makeTerrainMaterial(cameraPosition: Vector3, probeManager: Probe
         `
         #include <lights_fragment_begin>
         
+        #ifdef USE_PROBES
         // Indirect lighting from probe atlas
         // vec3 probePos = vWorldPos;
         // vec3 probePos = vWorldPos + normal * 4.0;
         vec3 probePos = vWorldPos + (vWorldNormal + mapN) * 4.0;
         vec3 irr = sampleIndirectIrradiance(probePos);
         irradiance += irr;
+        #endif
         `
       )
       // .replace(

@@ -12,6 +12,7 @@ import {
   DoubleSide,
   MeshBasicMaterial,
   PlaneGeometry,
+  HemisphereLight,
 } from "three";
 import { TerrainRenderer } from "./terrain/TerrainRenderer";
 import { TerrainData } from "./terrain/TerrainData";
@@ -29,7 +30,7 @@ import { getSphereGeometry } from "./worldObjects/geometry/sphereGeometry";
 import { ProbeManager } from "./lighting/ProbeManager";
 import { makeTerrainMaterial } from "./terrain/materials";
 import { logTime } from "./utils/log";
-import { OVERDRAW_TEST } from "./overrides";
+import { AMBIENT_LIGHT_MODE, OVERDRAW_TEST } from "./overrides";
 import { findIslandSpawn } from "./findIslandSpawn";
 // import { findIslandSpawn } from "./findIslandSpawn";
 
@@ -171,7 +172,10 @@ debugPlane.rotation.y = Math.PI; // flip to face camera
 debugPlane.updateMatrix();
 // camera.add(debugPlane);
 
-const terrainMat = makeTerrainMaterial(camera.position, probeManager);
+const terrainMat = makeTerrainMaterial(
+  camera.position,
+  AMBIENT_LIGHT_MODE === "probes" ? probeManager : undefined
+);
 const terrainRenderer = new TerrainRenderer(terrainData, scene, terrainMat);
 
 // Indirect lighting probe manager
@@ -317,7 +321,11 @@ setInterval(() => {
   setXZAInURL(camera.position.x, camera.position.z, angle);
 }, 4000);
 
-probeManager.initQueue(camera.position);
+if (AMBIENT_LIGHT_MODE === "hemi") {
+  scene.add(new HemisphereLight(0xcceeff, 0x776644, 0.1));
+} else if (AMBIENT_LIGHT_MODE === "probes") {
+  probeManager.initQueue(camera.position);
+}
 
 // Initialize UI dig radius display
 const digSpan = document.getElementById("dig-radius");
@@ -408,9 +416,11 @@ function loop() {
   // Update systems
   terrainQuadtree.update(camera);
 
-  // Update probes and push uniforms to terrain material
-  myLog("probeManager");
-  probeManager.update(camera.position);
+  if (AMBIENT_LIGHT_MODE === "probes") {
+    // Update probes and push uniforms to terrain material
+    myLog("probeManager");
+    probeManager.update(camera.position);
+  }
 
   myLog("terrainRenderer");
   const visTiles = terrainQuadtree.getVisibleTiles();
