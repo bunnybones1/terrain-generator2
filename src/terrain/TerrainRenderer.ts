@@ -125,7 +125,7 @@ export class TerrainRenderer {
     const normals: number[] = Array.from(baseNormals); // will expand as we add skirts
 
     // Add skirts to hide cracks: duplicate border vertices lowered downwards and copy normals
-    const skirtHeight = size * 0.1 + (t.lod === 2 ? 10 : 0); //10 extra for pine trees
+    const skirtHeight = size * 0.1 + (t.lod === 1 ? 10 : 0); //10 extra for pine trees
     const pushVertex = (
       wx: number,
       wy: number,
