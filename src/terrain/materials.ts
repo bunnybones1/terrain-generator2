@@ -22,11 +22,13 @@ export function makeTerrainMaterial(
   const snowTex = loadTex("textures/snow.png");
   const sandTex = loadTex("textures/sand.png");
   const pineTex = loadTex("textures/pineneedles.png");
+  const forestFloorTex = loadTex("textures/forestfloor.png");
   const grassNormalsTex = loadTex("textures/grass-normals.png");
   const rockNormalsTex = loadTex("textures/rocks-normals.png");
   const snowNormalsTex = loadTex("textures/snow-normals.png");
   const sandNormalsTex = loadTex("textures/sand-normals.png");
   const pineNormalsTex = loadTex("textures/pineneedles-normals.png");
+  const forestFloorNormalsTex = loadTex("textures/forestfloor-normals.png");
 
   // Base material
   const mat = new MeshStandardMaterial({
@@ -70,10 +72,12 @@ export function makeTerrainMaterial(
     shader.uniforms.uSnow = { value: snowTex };
     shader.uniforms.uSand = { value: sandTex };
     shader.uniforms.uPine = { value: pineTex };
+    shader.uniforms.uForestFloor = { value: forestFloorTex };
     shader.uniforms.uRockNormal = { value: rockNormalsTex };
     shader.uniforms.uSnowNormal = { value: snowNormalsTex };
     shader.uniforms.uSandNormal = { value: sandNormalsTex };
     shader.uniforms.uPineNormal = { value: pineNormalsTex };
+    shader.uniforms.uForestFloorNormal = { value: forestFloorNormalsTex };
 
     // Tiling base and per-layer scale (x: base tiling.x, y: base tiling.y, z: unused)
     shader.uniforms.uTiling = { value: tiling };
@@ -197,10 +201,12 @@ export function makeTerrainMaterial(
         uniform sampler2D uSnow;
         uniform sampler2D uSand;
         uniform sampler2D uPine;
+        uniform sampler2D uForestFloor;
         uniform sampler2D uRockNormal;
         uniform sampler2D uSnowNormal;
         uniform sampler2D uSandNormal;
         uniform sampler2D uPineNormal;
+        uniform sampler2D uForestFloorNormal;
 
         uniform vec2 uTiling;
         uniform vec3 uTilingScales;
@@ -434,6 +440,16 @@ export function makeTerrainMaterial(
       .replace(
         "#include <map_fragment>",
         `
+
+        //ambient occlusion terms will be used in many places
+        float ao = 1.0 - vInvAO;
+        // Combine with per-instance AO (treat value as an additional multiplier; default 0 -> no change)
+        float instAO = clamp(1.0 - vInstanceInvAO, 0.0, 1.0);
+        ao *= mix(instAO, 1.0, vTrunkMask);
+
+        float ao2 = ao * ao;
+        float aoCustom = ao2 * 0.75 + 0.12;
+
         #ifdef USE_MAP
           vec4 sampledDiffuseColor = texture2D( map, vMapUv * uTiling );
           diffuseColor *= sampledDiffuseColor;
@@ -446,11 +462,17 @@ export function makeTerrainMaterial(
         vec2 uvSnow = warpUv(uvBase * uTilingScales.y, vWorldPos + vec3(2.3,0.0,19.9));
         vec2 uvSand = warpUv(uvBase * uTilingScales.z, vWorldPos + vec3(31.7,0.0,3.1));
         vec2 uvPine = warpUv(uvBase * uTilingScales.x, vWorldPos + vec3(17.3,0.0,9.1)); // reuse rock scale as default
+        vec2 uvForest = warpUv(uvBase * uTilingScales.x, vWorldPos + vec3(5.7,0.0,23.4)); // similar scale to rock/pine
 
         vec3 rockSample = texture2D( uRock, uvRock ).rgb;
         vec3 snowSample = texture2D( uSnow, uvSnow ).rgb;
         vec3 sandSample = texture2D( uSand, uvSand ).rgb;
         vec3 pineSample = texture2D( uPine, uvPine ).rgb;
+        vec3 forestSample = texture2D( uForestFloor, uvForest ).rgb;
+
+        float forestFloorAmt = 1.0 - ao;
+
+        diffuseColor.rgb = mix(diffuseColor.rgb, forestSample, forestFloorAmt);
 
         vec3 baseAlbedo = diffuseColor.rgb;
 
@@ -495,6 +517,7 @@ export function makeTerrainMaterial(
         // Mix pine texture based on per-vertex pine attribute
         float pineAmt = clamp(vPine * 100.0, 0.0, 1.0);
         diffuseColor.rgb = mix(diffuseColor.rgb, pineSample, pineAmt);
+        
         `
       )
       .replace(
@@ -520,11 +543,18 @@ export function makeTerrainMaterial(
           vec3 snowTangentNormal = normalize(texture2D( uSnowNormal, warpUv(uvNBase * uTilingScales.y, vWorldPos + vec3(2.3,0.0,19.9)) ).xyz * 2.0 - 1.0);
           vec3 sandTangentNormal = normalize(texture2D( uSandNormal, warpUv(uvNBase * uTilingScales.z, vWorldPos + vec3(31.7,0.0,3.1)) ).xyz * 2.0 - 1.0);
           vec3 pineTangentNormal = normalize(texture2D( uPineNormal, warpUv(uvNBase * uTilingScales.x, vWorldPos + vec3(17.3,0.0,9.1)) ).xyz * 2.0 - 1.0);
+          vec3 forestTangentNormal = normalize(texture2D( uForestFloorNormal, warpUv(uvNBase * uTilingScales.x, vWorldPos + vec3(5.7,0.0,23.4)) ).xyz * 2.0 - 1.0);
 
           // Reuse previously computed weights from albedo stage directly
+          // Start with base -> sand
           vec3 nGS = normalize( mix(baseTangentNormal, sandTangentNormal, tSand) );
+
+          // Mix forest floor normal first using inverse AO
+          vec3 nGSForest = normalize( mix(nGS, forestTangentNormal, forestFloorAmt) );
+
+          // Then apply rock, snow, and pine on top
           float rockEnableN = 1.0 - step(0.2, vPine); // enable normals when vPine < 0.2
-          vec3 nGSR = normalize( mix(nGS, rockTangentNormal, tRock * rockEnableN) );
+          vec3 nGSR = normalize( mix(nGSForest, rockTangentNormal, tRock * rockEnableN) );
           vec3 nGSRSnow = normalize( mix(nGSR, snowTangentNormal, clamp(tSnow, 0.0, 1.0)) );
           vec3 blendedTangentNormal = normalize( mix(nGSRSnow, pineTangentNormal, clamp(vPine, 0.0, 1.0)) );
           blendedTangentNormal.xy *= normalScale;
@@ -579,16 +609,7 @@ export function makeTerrainMaterial(
         // irradiance += irr;
         // // reflectedLight.indirectDiffuse += irr;
         vec3 sandSpec = vec3(mix(1.0, 10.0/dist, tSand));
-        float ao = 1.0 - vInvAO;
-        // Combine with per-instance AO (treat value as an additional multiplier; default 0 -> no change)
-        float instAO = clamp(1.0 - vInstanceInvAO, 0.0, 1.0);
-        // ao *= instAO;
-        // ao *= instAO * vTrunkMask;
-        ao *= mix(instAO, 1.0, vTrunkMask);
-
-        float ao2 = ao * ao;
-        float aoCustom = ao2 * 0.75 + 0.12;
-        vec3 aoGreen = vec3(mix(ao, aoCustom, 0.5), aoCustom, ao);
+        vec3 aoGreen = mix(vec3(mix(ao, aoCustom, 0.5), aoCustom, ao), vec3(0.2), (1.0-ao) * 0.4);
         // aoGreen = vec3(vTrunkMask);
         reflectedLight.directDiffuse *= aoGreen;
         reflectedLight.indirectDiffuse *= aoGreen;
