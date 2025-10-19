@@ -11,6 +11,7 @@ import {
   PerspectiveCamera,
   IcosahedronGeometry,
   Euler,
+  InstancedBufferAttribute,
 } from "three";
 import { TerrainSampler } from "../terrain/TerrainSampler";
 import { PRNG } from "../utils/PRNG";
@@ -30,6 +31,7 @@ type StoneInstance = {
   pos: Vector3;
   rot: Quaternion;
   scale: number;
+  ao: number;
 };
 
 type Cell = {
@@ -148,6 +150,13 @@ export class StonesManager {
         mesh.geometry.boundingBox.max.set(half, maxHeight, half);
       }
 
+      // Allocate per-instance inverse AO attribute (float)
+      const capacity = this.lodCapacities[i];
+      const aoArray = new Float32Array(capacity);
+      const instanceInvAO = new InstancedBufferAttribute(aoArray, 1);
+      instanceInvAO.setUsage(35048); // DynamicDrawUsage
+      mesh.geometry.setAttribute("instanceInvAO", instanceInvAO);
+
       this.scene.add(mesh);
       return mesh;
     });
@@ -227,7 +236,8 @@ export class StonesManager {
       const x = (cx + 0.5 + rx) * cs;
       const z = (cz + 0.5 + rz) * cs;
 
-      const y = this.terrain.getSample(x, z).baseHeight;
+      const sampleAt = this.terrain.getSample(x, z);
+      const y = sampleAt.baseHeight;
       const slope = this.terrain.getSlope(x, z);
       if (y > 0 && slope < 0.5) continue;
 
@@ -244,6 +254,7 @@ export class StonesManager {
         pos: new Vector3(x, y + STONE_ON_GROUND_OFFSET, z),
         rot: quat,
         scale,
+        ao: sampleAt.pineWindow,
       });
     }
 
@@ -368,6 +379,7 @@ export class StonesManager {
 
               const sample = this.terrain.getSample(x, z);
               inst.pos.y = sample.baseHeight + STONE_ON_GROUND_OFFSET;
+              inst.ao = sample.pineWindow;
             }
 
             // Recompute cell meta min/max Y from fresh terrain samples to keep culling correct
@@ -445,6 +457,15 @@ export class StonesManager {
         this.tmpScale.set(inst.scale, inst.scale, inst.scale);
         this.tmpMatrix.compose(inst.pos, this.tmpQuat, this.tmpScale);
         mesh.setMatrixAt(mesh.count, this.tmpMatrix);
+
+        // Set per-instance inverse AO value; for stones we default to 1 (no darkening)
+        const aoAttr = mesh.geometry.getAttribute("instanceInvAO") as
+          | InstancedBufferAttribute
+          | undefined;
+        if (aoAttr) {
+          (aoAttr.array as Float32Array)[mesh.count] = inst.ao ?? 0;
+        }
+
         mesh.count++;
         globalCount++;
       }
@@ -452,6 +473,10 @@ export class StonesManager {
 
     for (const mesh of this.lodMeshes) {
       mesh.instanceMatrix.needsUpdate = true;
+      const aoAttr = mesh.geometry.getAttribute("instanceInvAO") as
+        | InstancedBufferAttribute
+        | undefined;
+      if (aoAttr) aoAttr.needsUpdate = true;
     }
   }
 }
