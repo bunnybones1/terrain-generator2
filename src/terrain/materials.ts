@@ -49,12 +49,6 @@ export function makeTerrainMaterial(
     mat.depthWrite = true;
   }
 
-  const tiling = new Vector2(1, 1);
-  if (mat.map) {
-    mat.map.repeat.copy(tiling);
-    mat.map.needsUpdate = true;
-  }
-
   mat.onBeforeCompile = (shader) => {
     // Inject define for overdraw test
     shader.defines = shader.defines || {};
@@ -79,8 +73,6 @@ export function makeTerrainMaterial(
     shader.uniforms.uPineNormal = { value: pineNormalsTex };
     shader.uniforms.uForestFloorNormal = { value: forestFloorNormalsTex };
 
-    // Tiling base and per-layer scale (x: base tiling.x, y: base tiling.y, z: unused)
-    shader.uniforms.uTiling = { value: tiling };
     // Per-layer tiling scales for rock, snow, sand
     shader.uniforms.uTilingScales = { value: new Vector4(0.93, 7.95, 4.5, 2.3) };
 
@@ -206,7 +198,6 @@ export function makeTerrainMaterial(
         uniform sampler2D uPineNormal;
         uniform sampler2D uForestFloorNormal;
 
-        uniform vec2 uTiling;
         uniform vec4 uTilingScales;
 
         uniform vec2 uRockSlope;          // x=threshold, y=band
@@ -407,10 +398,6 @@ export function makeTerrainMaterial(
           return smoothstep(center - band, center + band, v);
         }
 
-        vec2 rockSnowSandTiling(vec2 uv) {
-          return uv * uTiling;
-        }
-
         vec3 waterAbsorptionFactor(float depth) {
           float d = max(depth, 0.0);
           vec3 k = vec3(uWaterAbsorbPack.y, uWaterAbsorbPack.z, max(uWaterAbsorbPack.z * 0.5, 0.01));
@@ -448,11 +435,11 @@ export function makeTerrainMaterial(
         float aoCustom = ao2 * 0.75 + 0.12;
 
         #ifdef USE_MAP
-          vec4 sampledDiffuseColor = texture2D( map, vMapUv * uTiling );
+          vec4 sampledDiffuseColor = texture2D( map, vMapUv );
           diffuseColor *= sampledDiffuseColor;
         #endif
 
-        vec2 uvBase = vMapUv * uTiling;
+        vec2 uvBase = vMapUv;
 
         // Apply UV warp and stochastic shuffle per layer to break repetition
         vec2 uvRock = warpUv(uvBase * uTilingScales.x, vWorldPos);
@@ -520,7 +507,7 @@ export function makeTerrainMaterial(
       .replace(
         "#include <normal_fragment_maps>",
         `#ifdef USE_NORMALMAP_OBJECTSPACE
-          normal = texture2D( normalMap, vNormalMapUv * uTiling ).xyz * 2.0 - 1.0;
+          normal = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;
           #ifdef FLIP_SIDED
             normal = - normal;
           #endif
@@ -532,10 +519,10 @@ export function makeTerrainMaterial(
         #elif defined( USE_NORMALMAP_TANGENTSPACE )
           vec3 baseTangentNormal = vec3(0.0, 0.0, 1.0);
           #ifdef USE_NORMALMAP
-            baseTangentNormal = normalize(texture2D( normalMap, vNormalMapUv * uTiling ).xyz * 2.0 - 1.0);
+            baseTangentNormal = normalize(texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0);
           #endif
 
-          vec2 uvNBase = vNormalMapUv * uTiling;
+          vec2 uvNBase = vNormalMapUv;
           vec3 rockTangentNormal = normalize(texture2D( uRockNormal, warpUv(uvNBase * uTilingScales.x, vWorldPos ) ).xyz * 2.0 - 1.0);
           vec3 snowTangentNormal = normalize(texture2D( uSnowNormal, warpUv(uvNBase * uTilingScales.y, vWorldPos ) ).xyz * 2.0 - 1.0);
           vec3 sandTangentNormal = normalize(texture2D( uSandNormal, warpUv(uvNBase * uTilingScales.z, vWorldPos ) ).xyz * 2.0 - 1.0);
