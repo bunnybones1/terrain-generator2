@@ -74,8 +74,8 @@ export function buildStoneLODGeometries(baseRadius: number, rng: PRNG): Icosahed
     for (let i = 0; i < count; i++) {
       const x = attribPos.getX(i);
       const z = attribPos.getZ(i);
-      uvs[i * 2 + 0] = x;
-      uvs[i * 2 + 1] = z;
+      uvs[i * 2 + 0] = x * 0.25;
+      uvs[i * 2 + 1] = z * 0.25;
     }
     geom.setAttribute("uv", new BufferAttribute(uvs, 2));
 

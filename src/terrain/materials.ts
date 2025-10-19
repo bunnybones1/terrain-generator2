@@ -82,16 +82,14 @@ export function makeTerrainMaterial(
     // Tiling base and per-layer scale (x: base tiling.x, y: base tiling.y, z: unused)
     shader.uniforms.uTiling = { value: tiling };
     // Per-layer tiling scales for rock, snow, sand
-    shader.uniforms.uTilingScales = { value: new Vector3(1.23, 7.95, 2.5) };
+    shader.uniforms.uTilingScales = { value: new Vector4(0.93, 7.95, 4.5, 2.3) };
 
     // Slope threshold and band
-    shader.uniforms.uSlope = { value: new Vector2(0.5, 0.002) }; // x=threshold, y=band
+    shader.uniforms.uRockSlope = { value: new Vector2(0.5, 0.002) }; // x=threshold, y=band
 
     // Snow controls packed:
     // uSnowPack: x=elevationStart, y=elevationEnd, z=band, w=thresholdStart
     shader.uniforms.uSnowPack = { value: new Vector4(108.5, 256.05, 0.01, 0.85) };
-    // uSnowThresholdEnd separate to keep vec4 usage minimal? pack into uSnowExtra: x=thresholdEnd
-    shader.uniforms.uSnowExtra = { value: new Vector2(0.65, 0.0) };
 
     // Sand controls packed: x=height, y=band
     shader.uniforms.uSandPack = { value: new Vector2(10.0, 1.0) };
@@ -209,11 +207,10 @@ export function makeTerrainMaterial(
         uniform sampler2D uForestFloorNormal;
 
         uniform vec2 uTiling;
-        uniform vec3 uTilingScales;
+        uniform vec4 uTilingScales;
 
-        uniform vec2 uSlope;          // x=threshold, y=band
+        uniform vec2 uRockSlope;          // x=threshold, y=band
         uniform vec4 uSnowPack;       // x=elevStart, y=elevEnd, z=band, w=threshStart
-        uniform vec2 uSnowExtra;      // x=threshEnd
         uniform vec2 uSandPack;       // x=height, y=band
 
         uniform vec4 uWaterAbsorbPack;// x=level, y=absorbR, z=absorbG, w=scatterR
@@ -458,11 +455,11 @@ export function makeTerrainMaterial(
         vec2 uvBase = vMapUv * uTiling;
 
         // Apply UV warp and stochastic shuffle per layer to break repetition
-        vec2 uvRock = warpUv(uvBase * uTilingScales.x, vWorldPos + vec3(13.1,0.0,7.7));
-        vec2 uvSnow = warpUv(uvBase * uTilingScales.y, vWorldPos + vec3(2.3,0.0,19.9));
-        vec2 uvSand = warpUv(uvBase * uTilingScales.z, vWorldPos + vec3(31.7,0.0,3.1));
-        vec2 uvPine = warpUv(uvBase * uTilingScales.x, vWorldPos + vec3(17.3,0.0,9.1)); // reuse rock scale as default
-        vec2 uvForest = warpUv(uvBase * uTilingScales.x, vWorldPos + vec3(5.7,0.0,23.4)); // similar scale to rock/pine
+        vec2 uvRock = warpUv(uvBase * uTilingScales.x, vWorldPos);
+        vec2 uvSnow = warpUv(uvBase * uTilingScales.y, vWorldPos);
+        vec2 uvSand = warpUv(uvBase * uTilingScales.z, vWorldPos);
+        vec2 uvPine = warpUv(uvBase * uTilingScales.w, vWorldPos);
+        vec2 uvForest = warpUv(uvBase * uTilingScales.w, vWorldPos); // similar scale to pine
 
         vec3 rockSample = texture2D( uRock, uvRock ).rgb;
         vec3 snowSample = texture2D( uSnow, uvSnow ).rgb;
@@ -485,7 +482,7 @@ export function makeTerrainMaterial(
         float slope = sqrt(max(0.0, 1.0 - ny * ny));
 
         // Rock by slope
-        float tRock = bandstep(uSlope.x, uSlope.y, slope);
+        float tRock = bandstep(uRockSlope.x, uRockSlope.y, slope);
         // Allow rock when pine coverage is low: enable if vPine < 0.2
         float rockEnable = 1.0 - step(0.2, vPine); // 1 when vPine < 0.2, 0 when >= 0.2
         tRock *= rockEnable;
@@ -539,11 +536,11 @@ export function makeTerrainMaterial(
           #endif
 
           vec2 uvNBase = vNormalMapUv * uTiling;
-          vec3 rockTangentNormal = normalize(texture2D( uRockNormal, warpUv(uvNBase * uTilingScales.x, vWorldPos + vec3(13.1,0.0,7.7)) ).xyz * 2.0 - 1.0);
-          vec3 snowTangentNormal = normalize(texture2D( uSnowNormal, warpUv(uvNBase * uTilingScales.y, vWorldPos + vec3(2.3,0.0,19.9)) ).xyz * 2.0 - 1.0);
-          vec3 sandTangentNormal = normalize(texture2D( uSandNormal, warpUv(uvNBase * uTilingScales.z, vWorldPos + vec3(31.7,0.0,3.1)) ).xyz * 2.0 - 1.0);
-          vec3 pineTangentNormal = normalize(texture2D( uPineNormal, warpUv(uvNBase * uTilingScales.x, vWorldPos + vec3(17.3,0.0,9.1)) ).xyz * 2.0 - 1.0);
-          vec3 forestTangentNormal = normalize(texture2D( uForestFloorNormal, warpUv(uvNBase * uTilingScales.x, vWorldPos + vec3(5.7,0.0,23.4)) ).xyz * 2.0 - 1.0);
+          vec3 rockTangentNormal = normalize(texture2D( uRockNormal, warpUv(uvNBase * uTilingScales.x, vWorldPos ) ).xyz * 2.0 - 1.0);
+          vec3 snowTangentNormal = normalize(texture2D( uSnowNormal, warpUv(uvNBase * uTilingScales.y, vWorldPos ) ).xyz * 2.0 - 1.0);
+          vec3 sandTangentNormal = normalize(texture2D( uSandNormal, warpUv(uvNBase * uTilingScales.z, vWorldPos ) ).xyz * 2.0 - 1.0);
+          vec3 pineTangentNormal = normalize(texture2D( uPineNormal, warpUv(uvNBase * uTilingScales.w, vWorldPos ) ).xyz * 2.0 - 1.0);
+          vec3 forestTangentNormal = normalize(texture2D( uForestFloorNormal, warpUv(uvNBase * uTilingScales.w, vWorldPos ) ).xyz * 2.0 - 1.0);
 
           // Reuse previously computed weights from albedo stage directly
           // Start with base -> sand
