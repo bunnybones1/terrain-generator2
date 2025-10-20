@@ -40,7 +40,7 @@ export function makeTerrainMaterial(
     metalness: 0,
     roughness: 0.6,
     envMap: envMap,
-    envMapIntensity: 0.2,
+    envMapIntensity: 0.15,
     // wireframe: true,
   });
 

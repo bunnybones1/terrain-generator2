@@ -6,7 +6,6 @@ import {
   Vector3,
   WebGLRenderer,
   Mesh,
-  CircleGeometry,
   SphereGeometry,
   PMREMGenerator,
   DoubleSide,
@@ -21,10 +20,6 @@ import { TerrainSampler } from "./terrain/TerrainSampler";
 import FirstPersonController from "./FirstPersonController";
 import Water from "./worldObjects/Water";
 import { uniformTime } from "./worldObjects/materials/globalUniforms/time";
-import CloudPlaneMaterial from "./worldObjects/materials/CloudPlaneMaterial";
-import { getPlaneGeometry } from "./worldObjects/geometry/planeGeometry";
-import HemisphereAmbientMaterial from "./worldObjects/materials/HemisphereAmbientMaterial";
-import { getSphereGeometry } from "./worldObjects/geometry/sphereGeometry";
 import { ProbeManager } from "./lighting/ProbeManager";
 import { makeTerrainMaterial } from "./terrain/materials";
 import { logTime } from "./utils/log";
@@ -34,8 +29,8 @@ import Flashlight from "./worldObjects/Flashlight";
 import FPSCounter from "./helpers/FPSCounter";
 import initKeyboardShortcuts from "./helpers/keyboardShortcuts";
 import ScatteredObjectManager from "./ScatteredObjectManager";
-import { remapClamp } from "./utils/math";
 import { updateUIDigRadius } from "./helpers/ui/updateUIDigRadius";
+import Sky from "./worldObjects/Sky";
 // import { findIslandSpawn } from "./findIslandSpawn";
 
 // 3D area container
@@ -56,64 +51,121 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = 2;
 view3d.appendChild(renderer.domElement);
 
-let sunAngle = 0.15 * Math.PI * 2;
+let sunAngle = 0.35 * Math.PI * 2;
 const sunVector = new Vector3(Math.cos(sunAngle), Math.sin(sunAngle), 0);
 // Sun rotation speed around Z axis (radians per second)
-const SUN_ANGULAR_SPEED = 0.005;
-const SUN_ANGULAR_THRESHOLD = 0.005;
+const SUN_ANGULAR_SPEED = 0.0025;
+const SUN_ANGULAR_THRESHOLD = 0.00125;
 
 const sunColorDefault = new Color(1000, 900, 600);
 const sunColor = sunColorDefault.clone();
-// Define dusk hues
-const duskYellow = new Color(80, 80, 0);
-const duskRed = new Color(50, 0, 0);
+const sunColorForEnvMap = sunColorDefault.clone();
 
 const worldColorTop = new Color(0.3, 0.5, 1);
 const worldColorBottomDefault = new Color(0.4, 0.25, 0.1);
 const worldColorBottom = worldColorBottomDefault.clone();
+const cloudColor = worldColorTop.clone();
 const fogColor = worldColorTop;
 const wcScale = 2;
 const waterColorDefault = new Color(0.05 * wcScale, 0.2 * wcScale, 0.2 * wcScale);
 const waterColor = waterColorDefault.clone();
 
-// Preset gradient colors for sky top across the day
-const SKY_TOP_DAY = new Color(0.35, 0.6, 1.0); // bright blue
-const SKY_TOP_DUSK1 = new Color(1.2, 0.5, 0.15); // orange
-const SKY_TOP_DUSK2 = new Color(0.9, 0.15, 0.1); // red
-const SKY_TOP_NIGHT = new Color(0.003, 0.01, 0.03); // very dark blue
+// Sky color remap: define breakpoints (sun Y) and corresponding colors, ascending by Y
+// You can tweak these points to shape your sunrise/sunset transitions
+const remapPoints: number[] = [
+  -0.1, // deep night
+  0, // pre-dawn purple
+  0.1, // red
+  0.2, // orange
+  0.3, // daytime ramp
+  1.0, // high noon
+];
+
+const skyColors: Color[] = [
+  new Color(0.003, 0.01, 0.03), // night
+  new Color(0.5, 0.1, 0.8), // purple
+  new Color(1.1, 0.15, 0.1), // red
+  new Color(1.2, 0.9, 0.15), // orange
+  new Color(0.35, 0.6, 1.0), // day blue ramp
+  new Color(0.35, 0.6, 1.0), // high noon (same as day blue)
+];
+
+const sunColors: Color[] = [
+  new Color(0, 0, 0), // night
+  new Color(600, 0, 0), // purple
+  new Color(1000, 200, 0), // red
+  new Color(1000, 900, 0), // orange
+  new Color(1000, 900, 600), // day blue ramp
+  new Color(1000, 900, 600), // high noon (same as day blue)
+];
+
+const cloudColors: Color[] = [
+  new Color(0.03, 0.1, 0.2), // night
+  new Color(1.1, 0.15, 0.1), // red
+  new Color(1.2, 0.9, 0.15), // orange
+  new Color(0.35, 0.6, 1.0),
+  new Color(0.6, 0.6, 0.6),
+  new Color(0.6, 0.6, 0.6),
+];
+
+const cloudScroll = new Vector3();
+
+const tmp = new Color();
+// Helper: given sunY in [-1,1], return blended color from closest two remap points
+function getColorFromSunY(colors: Color[], y: number): Color {
+  // Clamp y to domain
+  const yy = Math.max(remapPoints[0], Math.min(remapPoints[remapPoints.length - 1], y));
+  // Find bracket
+  let i1 = 0;
+  for (let i = 1; i < remapPoints.length; i++) {
+    if (yy <= remapPoints[i]) {
+      i1 = i;
+      break;
+    }
+    i1 = i;
+  }
+  const i0 = Math.max(0, i1 - 1);
+  const x0 = remapPoints[i0];
+  const x1 = remapPoints[i1];
+  const c0 = colors[i0];
+  const c1 = colors[i1];
+  // Avoid divide by zero if duplicate points
+  const t = x1 !== x0 ? (yy - x0) / (x1 - x0) : 0;
+  tmp.copy(c0).lerp(c1, Math.max(0, Math.min(1, t)));
+  return tmp;
+}
 
 const bgScene = new Scene();
-const sunBallMaterial = new MeshBasicMaterial({
-  color: sunColor, // base sun color at/above horizon
-  side: DoubleSide,
-});
-sunBallMaterial.color = sunColor;
-const sunBall = new Mesh(new CircleGeometry(0.5, 32), sunBallMaterial);
-sunBall.position.copy(sunVector).normalize().multiplyScalar(9);
-sunBall.lookAt(new Vector3());
-bgScene.add(sunBall);
-const groundSkyAmbientMat = new HemisphereAmbientMaterial(
+
+const skyForEnvMap = new Sky(
+  sunVector,
+  sunColorForEnvMap,
   worldColorTop,
   worldColorBottom,
-  fogColor
+  fogColor,
+  cloudColor,
+  cloudScroll
 );
-const bgSphere = new Mesh(getSphereGeometry(1, 16, 64), groundSkyAmbientMat);
-bgSphere.scale.setScalar(10);
-bgScene.add(bgSphere);
-const cloudPlane = new Mesh(getPlaneGeometry(1, 1), new CloudPlaneMaterial(worldColorTop));
-cloudPlane.scale.setScalar(10);
-cloudPlane.position.y = 0.1;
-cloudPlane.rotation.x = Math.PI * 0.5;
-bgScene.add(cloudPlane);
-
+bgScene.add(skyForEnvMap.visuals);
 const envMaker = new PMREMGenerator(renderer);
 let envMap = envMaker.fromScene(bgScene, 0.0075);
 
+const skyForScene = new Sky(
+  sunVector,
+  sunColorForEnvMap,
+  worldColorTop,
+  worldColorBottom,
+  fogColor,
+  cloudColor,
+  cloudScroll
+);
+skyForScene.visuals.scale.multiplyScalar(10000);
 const scene = new Scene();
 if (OVERDRAW_TEST) {
   scene.background = new Color(0x000000);
 } else {
-  scene.background = envMap.texture;
+  scene.add(skyForScene.visuals);
+  // scene.background = envMap.texture;
 }
 
 scene.matrixAutoUpdate = false;
@@ -335,70 +387,32 @@ function loop() {
     // Rotate sunVector on Z axis
     sunAngle += SUN_ANGULAR_SPEED * dt;
 
+    cloudScroll.y += SUN_ANGULAR_SPEED * dt * 0.1;
+    cloudScroll.z += SUN_ANGULAR_SPEED * dt * 0.1;
+
     sunVector.set(Math.cos(sunAngle), Math.sin(sunAngle), 0);
     // Update sun ball to match new sunVector
-    sunBall.position.copy(sunVector).normalize().multiplyScalar(9);
-    sunBall.lookAt(new Vector3());
 
-    // Tint sun to yellow/red near horizon, then fade to black below horizon
+    skyForEnvMap.update();
+    skyForScene.update();
+
+    // Animate world colors via remap points and weighted blend of closest two
     {
-      // visibility factor based on height (y) relative to horizon (0)
-      // smoothstep: 0 below -0.1, 1 above +0.1, smooth transition in between
-      const y = sunVector.y;
-      // const edge0 = -0.1;
-      // const edge1 = +0.1;
-      // const t = Math.max(0, Math.min(1, (y - edge0) / (edge1 - edge0)));
-      // const smooth = t * t * (3 - 2 * t);
+      const y = Math.max(-1, Math.min(1, sunVector.clone().normalize().y));
+      worldColorTop.copy(getColorFromSunY(skyColors, y));
+      cloudColor.copy(getColorFromSunY(cloudColors, y));
+      sunColor.copy(getColorFromSunY(sunColors, y));
 
-      // Compute horizon proximity (0 far from horizon, 1 at horizon)
-      const horizonProximity = 1 - Math.abs(Math.max(0.0, y));
+      dirLight.color.copy(sunColor).multiplyScalar(0.0015);
 
-      // Blend yellow -> red as it gets even closer to horizon
-      sunColor.copy(sunColorDefault);
-
-      sunColor.lerp(duskYellow, horizonProximity);
-      sunColor.lerp(duskRed, horizonProximity);
-
-      sunColor.multiplyScalar(remapClamp(-0.1, -0.05, y));
-      dirLight.color.copy(sunColor).multiplyScalar(0.0005);
-
-      // // Apply fade below horizon
-      // sunColor.multiplyScalar(smooth);
+      sunColorForEnvMap.copy(sunColor).multiplyScalar(0.002);
 
       // Update water color: copy default and modulate by sun color (normalized to [0..1] range)
-      const sunColor01 = sunColor.clone().multiplyScalar(1.0 / 1000.0); // normalize large sun color
-      sunColor01.multiplyScalar(0.95).addScalar(0.05);
-      waterColor.copy(waterColorDefault).multiply(sunColor01);
-    }
-
-    // Animate sky top color through day (blue) -> dusk (orange/red) -> night (dark blue)
-    {
-      // Elevation factor: -1 (deep night) to +1 (high noon) from y component
-      const y = Math.max(-1, Math.min(1, sunVector.clone().normalize().y));
-      // Map y to [0,1] dayness via smoothstep around horizon
-      const dayness = (() => {
-        const edge0 = -0.1;
-        const edge1 = +0.1;
-        const t = Math.max(0, Math.min(1, (y - edge0) / (edge1 - edge0)));
-        return t * t * (3 - 2 * t); // smoothstep
-      })();
-
-      // Also compute a dusk factor strongest near horizon regardless of above/below
-      const horizonProximity = 1 - Math.min(1, Math.abs(y) / 0.3); // 1 at |y|=0, 0 at |y|>=0.3
-      const duskStrength = Math.max(0, horizonProximity);
-
-      // Blend: base between night and day, then add dusk hues near horizon
-      const baseSky = SKY_TOP_NIGHT.clone().lerp(SKY_TOP_DAY, dayness);
-
-      // Two-phase dusk: orange then red as sun approaches horizon
-      const duskColor = SKY_TOP_DUSK1.clone().lerp(
-        SKY_TOP_DUSK2,
-        Math.max(0, 0.5 - Math.abs(y)) * 2
-      );
-      const skyTop = baseSky.lerp(duskColor, duskStrength * (1 - Math.abs(y) * 2 + 1) * 0.5);
+      tmp.copy(sunColor).multiplyScalar(1.0 / 1000.0); // normalize large sun color
+      tmp.multiplyScalar(0.95).addScalar(0.05);
+      waterColor.copy(waterColorDefault).multiply(tmp);
 
       // Apply to hemisphere material top color
-      worldColorTop.copy(skyTop);
       worldColorBottom.copy(worldColorBottomDefault).multiply(sunColor).multiplyScalar(0.0015);
       // groundSkyAmbientMat.uniformsNeedUpdate = true;
     }
@@ -409,8 +423,8 @@ function loop() {
         lastSunAngleUpdate = sunAngle;
 
         if (envMap) envMap.texture.dispose();
-        envMap = envMaker.fromScene(bgScene, 0.0075);
-        scene.background = envMap.texture;
+        envMap = envMaker.fromScene(bgScene, 0.0, undefined, undefined, { size: 1024 });
+        // scene.background = envMap.texture;
 
         // If terrain material uses envmap mode, update its envMap reference
         if (AMBIENT_LIGHT_MODE === "envmap") {
@@ -447,6 +461,9 @@ function loop() {
   // Make inverted sphere follow the camera X/Z (keep Y fixed so horizon stays stable)
   waterSphere.position.x = camera.position.x;
   waterSphere.position.z = camera.position.z;
+  skyForScene.visuals.position.x = camera.position.x;
+  skyForScene.visuals.position.z = camera.position.z;
+  skyForScene.visuals.updateMatrixWorld();
 
   // Optionally also follow Y if desired:
   // skySphere.position.y = camera.position.y;

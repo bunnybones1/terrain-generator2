@@ -1,6 +1,6 @@
 precision lowp float;
 
-varying vec2 vUv;
+varying vec3 vUvw;
 
 uniform vec3 uCloudColor;
 
@@ -31,22 +31,11 @@ float noise(vec3 p){
 }
 
 void main() {
-  vec3 uvw1a = vec3(vUv.x * 5.0, vUv.y * 4.0, vUv.y * 5.0);
-  vec3 uvw1b = vec3(vUv.x * 5.0, 0.8, vUv.y * 5.0);
-  float disortX = noise(uvw1a);
-  float disortY = noise(uvw1b);
-  vec3 uvw2 = vec3((vUv.x+disortX) * 30.0, -20.0, (vUv.y+disortY) * 30.0);
-  vec3 uvw3 = vec3((vUv.x+disortX) * 100.0, 17.5, (vUv.y+disortY) * 100.0);
-  vec3 uvw4 = vec3((vUv.x) * 300.0, -27.0, (vUv.y) * 300.0);
-  vec3 uvw5 = vec3((vUv.x) * 900.0, -127.0, (vUv.y) * 900.0);
-  vec3 uvw6 = vec3((vUv.x) * 1900.0, 127.0, (vUv.y) * 1900.0);
-  float noiseSample = noise(uvw2);
-  noiseSample += noise(uvw3);
-  noiseSample += noise(uvw4);
-  noiseSample += noise(uvw5) * 0.5;
-  noiseSample += noise(uvw6) * 0.35;
-  noiseSample *= 0.25;
+  float noiseSample = noise(vUvw);
+  noiseSample += noise(vUvw * vec3(3.5)) * 0.5;
+  noiseSample += noise(vUvw * vec3(13.0)) * 0.25;
+  noiseSample *= 0.35;
   vec3 cloudColor = uCloudColor;
-  float cloudStr = max(0.0, noiseSample - 0.45);
+  float cloudStr = max(0.0, noiseSample - 0.25);
   gl_FragColor = mix(vec4(cloudColor * 3.0, 0.0), vec4(cloudColor * -4.0, 2.0), cloudStr);
 }

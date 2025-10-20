@@ -2,10 +2,8 @@ import {
   type BufferGeometry,
   type Camera,
   Color,
-  ConeGeometry,
   type Group,
   Material,
-  Matrix4,
   type PerspectiveCamera,
   type Scene,
   ShaderMaterial,
@@ -16,7 +14,7 @@ import { Reflector } from "three/addons/objects/Reflector.js";
 import { Refractor } from "three/addons/objects/Refractor.js";
 import { generateUUID } from "three/src/math/MathUtils";
 import { uniformTime } from "./materials/globalUniforms/time";
-import { lerp } from "../utils/math";
+import { makeInsanePerspectiveDiscGeometry } from "./geometry/insanePerspectiveDiscGeometryMaker";
 
 export default class Water {
   private uniformDistortionScale: { value: Vector2 };
@@ -29,42 +27,7 @@ export default class Water {
   ) {
     const uniformDistortionScale = { value: new Vector2(1, 1) };
     this.uniformDistortionScale = uniformDistortionScale;
-    const waterGeometry = new ConeGeometry(1, 0, 16, 12);
-    // Square every vertex coordinate (x,y,z) in the geometry
-    {
-      const posAttr = waterGeometry.getAttribute("position");
-      if (posAttr && posAttr.array) {
-        const arr = posAttr.array as Float32Array;
-        // Scale vertex length (radially) while preserving direction
-        for (let i = 0; i < arr.length; i += 3) {
-          const x = arr[i];
-          const y = arr[i + 1];
-          const z = arr[i + 2];
-          const r = Math.hypot(x, y, z);
-          if (r > 0) {
-            // Choose a powering behavior for radius; stronger push at larger radii
-            const k = lerp(3.8, 6, Math.min(1, r)); // reuse existing intent
-            const r2 = Math.pow(r, k);
-            const s = r2 / r;
-            arr[i] = x * s;
-            arr[i + 1] = y * s;
-            arr[i + 2] = z * s;
-          }
-        }
-        posAttr.needsUpdate = true;
-        waterGeometry.computeVertexNormals();
-        waterGeometry.computeBoundingSphere();
-        waterGeometry.computeBoundingBox();
-      }
-    }
-    // Scale and rotate water geometry via matrix (scale 200000, rotate 90deg on X)
-    const transform = new Matrix4()
-      .makeScale(200000, 200000, 200000)
-      .multiply(new Matrix4().makeRotationX(Math.PI / 2));
-    waterGeometry.applyMatrix4(transform);
-    waterGeometry.computeBoundingSphere();
-    waterGeometry.computeBoundingBox();
-
+    const waterGeometry = makeInsanePerspectiveDiscGeometry(200000);
     const reflector = new Reflector(waterGeometry, {
       textureWidth: 512,
       textureHeight: 512,
