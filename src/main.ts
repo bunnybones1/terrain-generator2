@@ -54,8 +54,8 @@ view3d.appendChild(renderer.domElement);
 let sunAngle = 0.35 * Math.PI * 2;
 const sunVector = new Vector3(Math.cos(sunAngle), Math.sin(sunAngle), 0);
 // Sun rotation speed around Z axis (radians per second)
-const SUN_ANGULAR_SPEED = 0.0025;
-const SUN_ANGULAR_THRESHOLD = 0.00125;
+const TIME_SPEED = 0.0025;
+const ENVMAP_TIME_THRESHOLD = 0.00125;
 
 const sunColorDefault = new Color(1000, 900, 600);
 const sunColor = sunColorDefault.clone();
@@ -101,9 +101,9 @@ const sunColors: Color[] = [
 
 const cloudColors: Color[] = [
   new Color(0.03, 0.1, 0.2), // night
-  new Color(1.1, 0.15, 0.1), // red
-  new Color(1.2, 0.9, 0.15), // orange
-  new Color(0.35, 0.6, 1.0),
+  new Color(0.6, 0.1, 0.1), // red
+  new Color(0.6, 0.3, 0.15), // orange
+  new Color(0.35, 0.3, 0.3),
   new Color(0.6, 0.6, 0.6),
   new Color(0.6, 0.6, 0.6),
 ];
@@ -384,14 +384,13 @@ function loop() {
 
   // Animate sun vector around Z axis and update background env
   {
-    // Rotate sunVector on Z axis
-    sunAngle += SUN_ANGULAR_SPEED * dt;
+    sunAngle += TIME_SPEED * dt;
 
-    cloudScroll.y += SUN_ANGULAR_SPEED * dt * 0.1;
-    cloudScroll.z += SUN_ANGULAR_SPEED * dt * 0.1;
+    cloudScroll.x = (camera.position.x * 40) / 100000 + sunAngle * 10.0;
+    cloudScroll.y = (camera.position.z * 40) / -100000;
+    cloudScroll.z = sunAngle * 10;
 
     sunVector.set(Math.cos(sunAngle), Math.sin(sunAngle), 0);
-    // Update sun ball to match new sunVector
 
     skyForEnvMap.update();
     skyForScene.update();
@@ -405,7 +404,7 @@ function loop() {
 
       dirLight.color.copy(sunColor).multiplyScalar(0.0015);
 
-      sunColorForEnvMap.copy(sunColor).multiplyScalar(0.002);
+      sunColorForEnvMap.copy(sunColor).multiplyScalar(0.02);
 
       // Update water color: copy default and modulate by sun color (normalized to [0..1] range)
       tmp.copy(sunColor).multiplyScalar(1.0 / 1000.0); // normalize large sun color
@@ -417,9 +416,9 @@ function loop() {
       // groundSkyAmbientMat.uniformsNeedUpdate = true;
     }
 
-    // Regenerate environment map from bgScene and assign to scene.background
+    // Regenerate environment map from bgScene
     if (!OVERDRAW_TEST) {
-      if (sunAngle - lastSunAngleUpdate > SUN_ANGULAR_THRESHOLD) {
+      if (sunAngle - lastSunAngleUpdate > ENVMAP_TIME_THRESHOLD) {
         lastSunAngleUpdate = sunAngle;
 
         if (envMap) envMap.texture.dispose();

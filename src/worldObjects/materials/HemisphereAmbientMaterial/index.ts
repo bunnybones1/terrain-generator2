@@ -1,9 +1,9 @@
-import { BackSide, Color, type ColorRepresentation, RawShaderMaterial, Uniform } from "three";
+import { BackSide, Color, type ColorRepresentation, ShaderMaterial, Uniform } from "three";
 
 import fragmentShader from "./frag.glsl?raw";
 import vertexShader from "./vert.glsl?raw";
 
-export default class HemisphereAmbientMaterial extends RawShaderMaterial {
+export default class HemisphereAmbientMaterial extends ShaderMaterial {
   constructor(
     colorTop: ColorRepresentation,
     colorBottom: ColorRepresentation,

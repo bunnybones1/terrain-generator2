@@ -192,7 +192,8 @@ export function makeTerrainMaterial(
         vInstanceInvAO = instanceInvAO;
         `
       );
-
+    console.log(shader.vertexShader);
+    console.log(shader.fragmentShader);
     shader.fragmentShader = shader.fragmentShader
       .replace(
         `vec3 totalSpecular = reflectedLight.directSpecular + reflectedLight.indirectSpecular;`,

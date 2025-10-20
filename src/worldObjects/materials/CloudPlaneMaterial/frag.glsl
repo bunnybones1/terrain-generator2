@@ -1,7 +1,7 @@
 precision lowp float;
-
+#include <common>
 varying vec3 vUvw;
-
+#include <logdepthbuf_pars_fragment>
 uniform vec3 uCloudColor;
 
 float mod289(float x){return x - floor(x * (1.0 / 289.0)) * 289.0;}
@@ -30,12 +30,27 @@ float noise(vec3 p){
     return o4.y * d.y + o4.x * (1.0 - d.y);
 }
 
+float poww(float v) {
+  float inv = (1.0 - v);
+  float s = sign(v);
+  return (1.0 - (inv * inv)) * s;
+}
+float poww2(float v) {
+  float inv = (1.0 - v);
+  return (1.0 - (inv * inv * inv * inv));
+}
+
 void main() {
-  float noiseSample = noise(vUvw);
-  noiseSample += noise(vUvw * vec3(3.5)) * 0.5;
-  noiseSample += noise(vUvw * vec3(13.0)) * 0.25;
-  noiseSample *= 0.35;
-  vec3 cloudColor = uCloudColor;
-  float cloudStr = max(0.0, noiseSample - 0.25);
-  gl_FragColor = mix(vec4(cloudColor * 3.0, 0.0), vec4(cloudColor * -4.0, 2.0), cloudStr);
+  #include <logdepthbuf_fragment>
+
+  float noiseSample = poww(noise(vUvw)) * 3.0 - 1.25;
+  noiseSample += poww2(abs(noise(vUvw * vec3(3.5))) * 0.25);
+  noiseSample += poww2(abs(noise(vUvw * vec3(13.0))) * 0.125);
+  noiseSample += poww2(abs(noise(vUvw * vec3(37.0))) * 0.0325);
+  noiseSample *= 0.5;
+  float cloudStr = min(1.0, max(0.0, noiseSample - 0.5));
+  // cloudStr = step( 0.5, cloudStr);
+  gl_FragColor = mix(vec4(uCloudColor * 5.0 * (1.0 - cloudStr), 0.0), vec4(uCloudColor * cloudStr * 1.6, min(1.0, 1.0 + cloudStr * 5.0)), cloudStr);
+  // gl_FragColor = vec4(0.3,0.3,0.3, cloudStr);
+  #include <colorspace_fragment>
 }

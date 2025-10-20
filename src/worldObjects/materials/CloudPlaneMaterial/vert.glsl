@@ -1,15 +1,13 @@
 precision highp float;
-
-attribute vec4 position;
-attribute vec2 uv;
+#include <common>
 uniform vec3 uScroll;
-
-uniform mat4 projectionMatrix;
-uniform mat4 modelViewMatrix;
 
 varying vec3 vUvw;
 
+#include <logdepthbuf_pars_vertex>
+
 void main() {
-  gl_Position = projectionMatrix * (modelViewMatrix * position);
-  vUvw = (vec3(uv.x, uv.y, uv.x - uv.y) + uScroll) * vec3(50.0);
+  gl_Position = projectionMatrix * (modelViewMatrix * vec4(position, 1.0));
+  vUvw = (vec3(uv.x, uv.y, 0.0)) * 100.0 + vec3(uScroll);
+  #include <logdepthbuf_vertex>
 }
