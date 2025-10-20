@@ -13,6 +13,7 @@ import {
   MeshBasicMaterial,
   PlaneGeometry,
   HemisphereLight,
+  SpotLight,
 } from "three";
 import { TerrainRenderer } from "./terrain/TerrainRenderer";
 import { TerrainData } from "./terrain/TerrainData";
@@ -31,7 +32,8 @@ import { ProbeManager } from "./lighting/ProbeManager";
 import { makeTerrainMaterial } from "./terrain/materials";
 import { logTime } from "./utils/log";
 import { AMBIENT_LIGHT_MODE, OVERDRAW_TEST } from "./overrides";
-import { findIslandSpawn } from "./findIslandSpawn";
+import { initLocationHelper } from "./helpers/locationHelper";
+import Flashlight from "./worldObjects/Flashlight";
 // import { findIslandSpawn } from "./findIslandSpawn";
 
 // 3D area container
@@ -138,43 +140,6 @@ function resize() {
 }
 window.addEventListener("resize", resize);
 
-// Re-seed and export handlers
-window.addEventListener("keydown", (e) => {
-  if (e.key === "[" || e.key === "{") {
-    // decrease dig radius nonlinearly; bigger digs change faster
-    const r0 = firstPersonController.digRadius;
-    const step = Math.max(0.5, Math.min(10, r0 * 0.15)); // 15% of current size, min 0.5, max 10
-    let r = Math.max(0.5, r0 - step);
-    // rounding rule: <=10 -> nearest 0.5m, >10 -> nearest 1m
-    if (r <= 10) {
-      r = Math.round(r * 2) / 2;
-    } else {
-      r = Math.round(r);
-    }
-    // clamp
-    r = Math.max(0.5, Math.min(500, r));
-    firstPersonController.digRadius = r;
-    const span = document.getElementById("dig-radius");
-    if (span) span.textContent = `${firstPersonController.digRadius}`;
-  } else if (e.key === "]" || e.key === "}") {
-    // increase dig radius nonlinearly; bigger digs change faster
-    const r0 = firstPersonController.digRadius;
-    const step = Math.max(0.5, Math.min(10, r0 * 0.15)); // 15% of current size, min 0.5, max 10
-    let r = Math.min(500, r0 + step);
-    // rounding rule: <=10 -> nearest 0.5m, >10 -> nearest 1m
-    if (r <= 10) {
-      r = Math.round(r * 2) / 2;
-    } else {
-      r = Math.round(r);
-    }
-    // clamp
-    r = Math.max(0.5, Math.min(500, r));
-    firstPersonController.digRadius = r;
-    const span = document.getElementById("dig-radius");
-    if (span) span.textContent = `${firstPersonController.digRadius}`;
-  }
-});
-
 const terrainSeed = 2;
 const spawnSeed = 7;
 
@@ -269,64 +234,7 @@ const firstPersonController = new FirstPersonController(
   terrainData
 );
 
-// URL utilities for camera position and angle (x, z, a)
-function getInitialXZAFromURL(): { x: number; z: number; a: number | null } | null {
-  try {
-    const params = new URLSearchParams(window.location.search);
-    const xs = params.get("x");
-    const zs = params.get("z");
-    if (xs === null || zs === null) return null;
-    const x = parseFloat(xs);
-    const z = parseFloat(zs);
-    if (!isFinite(x) || !isFinite(z)) return null;
-    const as = params.get("a");
-    let a: number | null = null;
-    if (as !== null) {
-      const av = parseFloat(as);
-      if (isFinite(av)) a = av;
-    }
-    return { x, z, a };
-  } catch {
-    return null;
-  }
-}
-
-function setXZAInURL(x: number, z: number, a: number | null | undefined) {
-  try {
-    const url = new URL(window.location.href);
-    url.searchParams.set("x", x.toFixed(2));
-    url.searchParams.set("z", z.toFixed(2));
-    if (a !== null && a !== undefined && isFinite(a)) {
-      url.searchParams.set("a", a.toFixed(3));
-    } else {
-      url.searchParams.delete("a");
-    }
-    window.history.replaceState({}, "", url.toString());
-  } catch {
-    // noop
-  }
-}
-
-// Initialize from URL params or fallback to spawn
-const initialXZA = getInitialXZAFromURL();
-if (initialXZA) {
-  const angle = initialXZA.a ?? 0;
-  firstPersonController.setLocation(initialXZA.x, initialXZA.z, angle);
-  // keep URL normalized
-  setXZAInURL(initialXZA.x, initialXZA.z, angle);
-} else {
-  // if no URL params, use spawn and seed URL
-  const spawn = findIslandSpawn(terrainSampler.data, spawnSeed);
-  firstPersonController.setLocation(spawn.x, spawn.z, spawn.angle);
-  setXZAInURL(spawn.x, spawn.z, spawn.angle);
-}
-
-// Periodically write camera x,z,angle to URL every 4 seconds
-setInterval(() => {
-  // Assuming FirstPersonController keeps yaw/angle accessible; fall back to 0 if not available
-  const angle = firstPersonController.yaw;
-  setXZAInURL(camera.position.x, camera.position.z, angle);
-}, 4000);
+initLocationHelper(firstPersonController, terrainSampler);
 
 if (AMBIENT_LIGHT_MODE === "hemi") {
   scene.add(new HemisphereLight(0xcceeff, 0x776644, 0.15));
@@ -397,6 +305,50 @@ setInterval(() => {
   const span = document.getElementById("cam-height");
   if (span) span.textContent = `${camera.position.y.toFixed(2)}`;
 }, 100);
+
+const flashlight = new Flashlight(camera);
+scene.add(flashlight.light);
+scene.add(flashlight.lightTarget);
+
+// Re-seed and export handlers
+window.addEventListener("keydown", (e) => {
+  if (e.key === "[" || e.key === "{") {
+    // decrease dig radius nonlinearly; bigger digs change faster
+    const r0 = firstPersonController.digRadius;
+    const step = Math.max(0.5, Math.min(10, r0 * 0.15)); // 15% of current size, min 0.5, max 10
+    let r = Math.max(0.5, r0 - step);
+    // rounding rule: <=10 -> nearest 0.5m, >10 -> nearest 1m
+    if (r <= 10) {
+      r = Math.round(r * 2) / 2;
+    } else {
+      r = Math.round(r);
+    }
+    // clamp
+    r = Math.max(0.5, Math.min(500, r));
+    firstPersonController.digRadius = r;
+    const span = document.getElementById("dig-radius");
+    if (span) span.textContent = `${firstPersonController.digRadius}`;
+  } else if (e.key === "]" || e.key === "}") {
+    // increase dig radius nonlinearly; bigger digs change faster
+    const r0 = firstPersonController.digRadius;
+    const step = Math.max(0.5, Math.min(10, r0 * 0.15)); // 15% of current size, min 0.5, max 10
+    let r = Math.min(500, r0 + step);
+    // rounding rule: <=10 -> nearest 0.5m, >10 -> nearest 1m
+    if (r <= 10) {
+      r = Math.round(r * 2) / 2;
+    } else {
+      r = Math.round(r);
+    }
+    // clamp
+    r = Math.max(0.5, Math.min(500, r));
+    firstPersonController.digRadius = r;
+    const span = document.getElementById("dig-radius");
+    if (span) span.textContent = `${firstPersonController.digRadius}`;
+  } else if (e.key.toLowerCase() === "l") {
+    // toggle flashlight
+    flashlight.visible = !flashlight.visible;
+  }
+});
 
 let frameCount = 0;
 const frameTimesToLog = 20;
@@ -470,6 +422,7 @@ function loop() {
     cam.updateProjectionMatrix();
   }
 
+  flashlight.update(dt);
   // Make inverted sphere follow the camera X/Z (keep Y fixed so horizon stays stable)
   waterSphere.position.x = camera.position.x;
   waterSphere.position.z = camera.position.z;

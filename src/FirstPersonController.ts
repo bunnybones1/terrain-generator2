@@ -50,7 +50,7 @@ export default class FirstPersonController {
   public digRadius: number = 2.0; // meters
 
   constructor(
-    private camera: PerspectiveCamera,
+    public camera: PerspectiveCamera,
     private terrainSampler: TerrainSampler,
     renderer: WebGLRenderer,
     private terrainRenderer: TerrainRenderer,
@@ -125,7 +125,7 @@ export default class FirstPersonController {
     this.yaw = angle;
     // height should be very close to 0; use sampler for consistency and add a small offset
     const groundH0 = this.terrainSampler.getSample(x, z).baseHeight + initialHeight;
-    this.camera.position.y = Math.max(0, groundH0) + this.eyeHeight + 0.5;
+    this.camera.position.y = Math.max(-1000, groundH0) + this.eyeHeight + 0.5;
 
     // Initialize smoothed position
     this.smoothedPos.copy(this.camera.position);
