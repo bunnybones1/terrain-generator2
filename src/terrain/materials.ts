@@ -133,17 +133,11 @@ export function makeTerrainMaterial(
         `radiance += getIBLRadiance( geometryViewDir, geometryNormal, material.roughness ) * transmittance;`
       );
 
-    console.log(lights_fragment_maps_custom);
-
     const lights_fragment_begin_custom = ShaderChunk.lights_fragment_begin.replace(
       `getDirectionalLightInfo( directionalLight, directLight );`,
       `getDirectionalLightInfo( directionalLight, directLight );
           directLight.color *= transmittance;`
     );
-    console.log("lights_fragment_begin_custom", lights_fragment_begin_custom);
-    console.log("lights_fragment_maps", ShaderChunk.lights_fragment_maps);
-    console.log("lights_physical_pars_fragment", ShaderChunk.lights_physical_pars_fragment);
-    console.log(shader.fragmentShader);
     shader.vertexShader = shader.vertexShader
       .replace(
         "#include <common>",
@@ -198,7 +192,6 @@ export function makeTerrainMaterial(
         `
       );
 
-    // console.log(ShaderChunk.envmap_physical_pars_fragment)
     shader.fragmentShader = shader.fragmentShader
       .replace(
         `vec3 totalSpecular = reflectedLight.directSpecular + reflectedLight.indirectSpecular;`,
@@ -581,6 +574,7 @@ export function makeTerrainMaterial(
         `#include <lights_physical_fragment>`,
         `
 
+        float waterLevel = uWaterAbsorbPack.x;
         vec3 camPosF = cameraPosition;
         vec3 toFragF = vWorldPos - camPosF;
         float dist = length(toFragF);
@@ -589,6 +583,9 @@ export function makeTerrainMaterial(
         // specularIntensity = mix(specularIntensity, 0.3, tSand);
         roughnessFactor = mix(roughnessFactor, 0.4, tSnow);
         roughnessFactor = mix(roughnessFactor, 1.0, pineAmt);
+        if (vWorldPos.y < waterLevel + 0.06) {
+          roughnessFactor = 1.0;
+        }
         #include <lights_physical_fragment>`
       )
       .replace(
@@ -601,7 +598,6 @@ export function makeTerrainMaterial(
         float rayLen = length(toFrag);
         vec3 rayDir = (rayLen > 0.0) ? toFrag / max(rayLen, 1e-6) : vec3(0.0, -1.0, 0.0);
 
-        float waterLevel = uWaterAbsorbPack.x;
         float camY = camPos.y;
         float fragY = vWorldPos.y;
 

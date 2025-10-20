@@ -6,8 +6,8 @@ import {
   Material,
   type PerspectiveCamera,
   type Scene,
-  ShaderChunk,
   ShaderMaterial,
+  Vector2,
   type WebGLRenderer,
 } from "three";
 import { Reflector } from "three/addons/objects/Reflector.js";
@@ -17,12 +17,12 @@ import { getPlaneGeometry } from "./geometry/planeGeometry";
 import { uniformTime } from "./materials/globalUniforms/time";
 
 export default class Water {
-  private uniformDistortionScale: { value: number };
+  private uniformDistortionScale: { value: Vector2 };
   visuals: Reflector;
   refractor: Refractor;
   private playerWaterSide = 0;
   constructor(private camera: PerspectiveCamera) {
-    const uniformDistortionScale = { value: 1 };
+    const uniformDistortionScale = { value: new Vector2(1, 1) };
     this.uniformDistortionScale = uniformDistortionScale;
     const waterGeometry = getPlaneGeometry(30000, 30000, 40, 40);
     const reflector = new Reflector(waterGeometry, {
@@ -58,7 +58,6 @@ export default class Water {
             value: new Color(0.05 * wcScale, 0.2 * wcScale, 0.2 * wcScale),
           };
 
-          console.log("logdepthbuf_fragment", ShaderChunk.logdepthbuf_fragment);
           shader.uniforms.uDistortionScale = uniformDistortionScale;
           shader.vertexShader = shader.vertexShader.replace(
             "void main() {",
@@ -81,7 +80,7 @@ export default class Water {
               `
 						uniform float uTime;
 						uniform sampler2D tDiffuse2;
-						uniform float uDistortionScale;
+						uniform vec2 uDistortionScale;
 						#include <common>
 						#include <normal_pars_fragment>
 						varying vec3 vWorldPosition;
@@ -139,10 +138,10 @@ export default class Water {
 						vec3 cameraToFrag = normalize( cameraToFragPos );
 						vec3 worldNormal = inverseTransformDirection( normal, viewMatrix );
 						float cy = uTime + (vWorldPosition.x+vWorldPosition.z) * 0.5;
-            vec3 noiseCoord = vec3(vWorldPosition.x, cy, vWorldPosition.z);
+            vec3 noiseCoord = vec3(vWorldPosition.x * uDistortionScale.y, cy * uDistortionScale.y, vWorldPosition.z * uDistortionScale.y);
 						vec3 noiseCoordSmall = noiseCoord * 4.0;
 						float fakeY1 = abs(noise(noiseCoord));
-						float fakeY2 = abs(noise(noiseCoord + vec3(13.5,11.5, -0.827)));
+						float fakeY2 = abs(noise(noiseCoord + vec3(13.5, 11.5, -0.827)));
 						float fakeY1s = abs(noise(noiseCoordSmall));
 						float fakeY2s = abs(noise(noiseCoordSmall + vec3(13.5,11.5, -0.827)));
 						float fakeY = min(fakeY1, fakeY2) + min(fakeY1s, fakeY2s) * 0.1;
@@ -154,13 +153,15 @@ export default class Water {
               "vec4 base = texture2DProj( tDiffuse, vUv );",
               `
 						vec3 coord = vUv.xyz / vUv.w;
-						vec2 uvReflect = coord.xy + coord.z * fake.xz * 20.0 * uDistortionScale;
-						vec2 uvRefract = coord.xy + coord.z * -fake.xz * 45.0 * uDistortionScale;
+						vec2 uvReflect = coord.xy + coord.z * fake.xz * 20.0 * uDistortionScale.x;
+						vec2 uvRefract = coord.xy + coord.z * -fake.xz * 45.0 * uDistortionScale.x;
 						// vec4 base = texture2DProj( tDiffuse, vUv-fake.xzxz );
 
 						vec4 refractColor = texture2D( tDiffuse2, vec2( 1.0 - uvRefract.x, uvRefract.y ) );
 						vec4 reflectColor = texture2D( tDiffuse, uvReflect );
-						vec4 base = mix(reflectColor, refractColor, abs(reflectVec.y));
+            float invRY = 1.0 - abs(reflectVec.y);
+            float invRY2 = invRY * invRY * invRY;
+						vec4 base = mix(reflectColor, refractColor, 1.0 - (invRY2 * invRY2 * invRY2));
             
 
         // Compute underwater segment length along the view ray
@@ -188,7 +189,6 @@ export default class Water {
             .replace(
               `gl_FragColor = vec4( blendOverlay( base.rgb, color ), 1.0 );`,
               `gl_FragColor = vec4( base.rgb , 1.0 );`
-              // `gl_FragColor = vec4( vec3(waterSeg * 0.005, waterSeg * 0.0025, waterSeg * 0.00125) , 1.0 );`
             )
             // .replace(`#include <tonemapping_fragment>`,``)
             .replace(
@@ -199,7 +199,6 @@ export default class Water {
               gl_FragColor.rgb = gl_FragColor.rgb * (vec3(1.0)-inScattering) + inScattering;
               `
             );
-          console.log(shader.fragmentShader);
           resolve();
         };
         const matUuid = generateUUID();
@@ -241,7 +240,7 @@ export default class Water {
           this.visuals.visible = true;
         };
         this.visuals.material.uniforms.tDiffuse2 = this.refractor.material.uniforms.tDiffuse;
-        this.visuals.material.uniforms.uDistortionScale = { value: 1 };
+        // this.visuals.material.uniforms.uDistortionScale = { value: 1 };
       }
     });
   }
@@ -253,7 +252,8 @@ export default class Water {
       this.visuals.rotation.x = Math.PI * playerWaterSide;
       this.refractor.rotation.x = Math.PI * playerWaterSide;
       this.refractor.position.y = (1 + playerWaterSide * 0.2) / 16;
-      this.uniformDistortionScale.value = newPlayerWaterSide === -1 ? 50 : 5;
+      this.uniformDistortionScale.value.x = newPlayerWaterSide === -1 ? 50 : 5;
+      this.uniformDistortionScale.value.y = 1;
     }
     this.visuals.position.x = this.camera.position.x;
     this.visuals.position.z = this.camera.position.z;
