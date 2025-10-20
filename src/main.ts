@@ -13,15 +13,12 @@ import {
   MeshBasicMaterial,
   PlaneGeometry,
   HemisphereLight,
-  SpotLight,
 } from "three";
 import { TerrainRenderer } from "./terrain/TerrainRenderer";
 import { TerrainData } from "./terrain/TerrainData";
 import { TerrainQuadtree } from "./terrain/TerrainQuadtree";
 import { TerrainSampler } from "./terrain/TerrainSampler";
 import FirstPersonController from "./FirstPersonController";
-import { StonesManager } from "./worldObjects/StonesManager";
-import { TreeManager } from "./worldObjects/TreeManager";
 import Water from "./worldObjects/Water";
 import { uniformTime } from "./worldObjects/materials/globalUniforms/time";
 import CloudPlaneMaterial from "./worldObjects/materials/CloudPlaneMaterial";
@@ -34,6 +31,9 @@ import { logTime } from "./utils/log";
 import { AMBIENT_LIGHT_MODE, OVERDRAW_TEST } from "./overrides";
 import { initLocationHelper } from "./helpers/locationHelper";
 import Flashlight from "./worldObjects/Flashlight";
+import FPSCounter from "./helpers/FPSCounter";
+import initKeyboardShortcuts from "./helpers/keyboardShortcuts";
+import ScatteredObjectManager from "./ScatteredObjectManager";
 // import { findIslandSpawn } from "./findIslandSpawn";
 
 // 3D area container
@@ -141,7 +141,6 @@ function resize() {
 window.addEventListener("resize", resize);
 
 const terrainSeed = 2;
-const spawnSeed = 7;
 
 const terrainData = new TerrainData(
   {
@@ -221,11 +220,6 @@ scene.add(waterSphere);
 // Timekeeping
 let lastTime = performance.now();
 
-// FPS tracking DOM and state
-let fpsFrameCount = 0;
-let fpsLastTime = performance.now();
-const fpsElement = document.getElementById("fps-counter");
-
 const firstPersonController = new FirstPersonController(
   camera,
   terrainSampler,
@@ -246,53 +240,7 @@ if (AMBIENT_LIGHT_MODE === "hemi") {
 const digSpan = document.getElementById("dig-radius");
 if (digSpan) digSpan.textContent = `${firstPersonController.digRadius}`;
 
-// Trees systems: shoreline pines
-const treeLayers: TreeManager[] = [
-  new TreeManager("pines-L", scene, terrainSampler, terrainMat, 2001, {
-    cellSize: 20,
-    lodCapacities: [200, 400, 800, 1200, 2400],
-    manageRadius: 100,
-  }),
-];
-// Stones systems: five layers from large/sparse to small/dense
-const stonesLayers: StonesManager[] = [
-  // Layer 0: very large, very sparse, see from far away
-  new StonesManager("stones-XL", scene, terrainSampler, terrainMat, 1001, {
-    cellSize: 30,
-    density: 0.00006, // ~0.06 per 1000 m^2
-    stoneRadius: 8,
-    lodCapacities: [10, 20, 30, 40, 50],
-    manageRadius: 1000,
-  }), // Layer 1: large, sparse
-  new StonesManager("stones-L", scene, terrainSampler, terrainMat, 1002, {
-    cellSize: 24,
-    density: 0.0002,
-    stoneRadius: 4,
-    lodCapacities: [10, 20, 30, 40, 50],
-    manageRadius: 600,
-  }), // Layer 2: medium
-  new StonesManager("stones-M", scene, terrainSampler, terrainMat, 1003, {
-    cellSize: 18,
-    density: 0.003,
-    stoneRadius: 2,
-    lodCapacities: [20, 40, 60, 80, 100],
-    manageRadius: 400,
-  }), // Layer 3: small
-  new StonesManager("stones-S", scene, terrainSampler, terrainMat, 1004, {
-    cellSize: 12,
-    density: 0.03,
-    stoneRadius: 1,
-    lodCapacities: [40, 60, 80, 100, 200],
-    manageRadius: 240,
-  }), // Layer 4: very small, numerous, only near camera
-  new StonesManager("stones-XS", scene, terrainSampler, terrainMat, 1005, {
-    cellSize: 8,
-    density: 0.1,
-    stoneRadius: 0.5,
-    lodCapacities: [100, 200, 300, 400, 500],
-    manageRadius: 120,
-  }),
-];
+const scatMan = new ScatteredObjectManager(scene, terrainSampler, terrainMat, camera);
 
 // Movement tracking and temp objects for instanced recycling
 const prevCamPos = new Vector3().copy(camera.position);
@@ -310,45 +258,9 @@ const flashlight = new Flashlight(camera);
 scene.add(flashlight.light);
 scene.add(flashlight.lightTarget);
 
-// Re-seed and export handlers
-window.addEventListener("keydown", (e) => {
-  if (e.key === "[" || e.key === "{") {
-    // decrease dig radius nonlinearly; bigger digs change faster
-    const r0 = firstPersonController.digRadius;
-    const step = Math.max(0.5, Math.min(10, r0 * 0.15)); // 15% of current size, min 0.5, max 10
-    let r = Math.max(0.5, r0 - step);
-    // rounding rule: <=10 -> nearest 0.5m, >10 -> nearest 1m
-    if (r <= 10) {
-      r = Math.round(r * 2) / 2;
-    } else {
-      r = Math.round(r);
-    }
-    // clamp
-    r = Math.max(0.5, Math.min(500, r));
-    firstPersonController.digRadius = r;
-    const span = document.getElementById("dig-radius");
-    if (span) span.textContent = `${firstPersonController.digRadius}`;
-  } else if (e.key === "]" || e.key === "}") {
-    // increase dig radius nonlinearly; bigger digs change faster
-    const r0 = firstPersonController.digRadius;
-    const step = Math.max(0.5, Math.min(10, r0 * 0.15)); // 15% of current size, min 0.5, max 10
-    let r = Math.min(500, r0 + step);
-    // rounding rule: <=10 -> nearest 0.5m, >10 -> nearest 1m
-    if (r <= 10) {
-      r = Math.round(r * 2) / 2;
-    } else {
-      r = Math.round(r);
-    }
-    // clamp
-    r = Math.max(0.5, Math.min(500, r));
-    firstPersonController.digRadius = r;
-    const span = document.getElementById("dig-radius");
-    if (span) span.textContent = `${firstPersonController.digRadius}`;
-  } else if (e.key.toLowerCase() === "l") {
-    // toggle flashlight
-    flashlight.visible = !flashlight.visible;
-  }
-});
+initKeyboardShortcuts(firstPersonController, flashlight);
+
+const fpsCounter = new FPSCounter();
 
 let frameCount = 0;
 const frameTimesToLog = 20;
@@ -357,22 +269,12 @@ const noop = () => {};
 const frameLogTime = (message: string) => logTime(`${frameCount}: ${message}`);
 function loop() {
   frameCount++;
-  fpsFrameCount++;
   const logFrame = frameCount < frameTimesToLog || frameCount % 300 === 0;
   const myLog = logFrame ? frameLogTime : noop;
+
+  fpsCounter.update();
   myLog("loop cb start");
   const now = performance.now();
-
-  // Update FPS once per second
-  if (now - fpsLastTime >= 1000) {
-    const elapsed = now - fpsLastTime;
-    const fps = Math.round((fpsFrameCount * 1000) / elapsed);
-    if (fpsElement) {
-      fpsElement.textContent = `${fps} FPS`;
-    }
-    fpsFrameCount = 0;
-    fpsLastTime = now;
-  }
 
   const dt = Math.min(0.05, (now - lastTime) / 1000);
   uniformTime.value += dt;
@@ -432,12 +334,7 @@ function loop() {
 
   myLog("dirtyAABBs");
   const dirtyAABBs = terrainData.popDirtyAABBs();
-  for (const layer of stonesLayers) {
-    layer.update(camera, dirtyAABBs);
-  }
-  for (const layer of treeLayers) {
-    layer.update(camera, dirtyAABBs);
-  }
+  scatMan.updateAABBs(dirtyAABBs);
 
   // Recycle tiny sphere instances when they move beyond spawnRadius
   camMove.subVectors(camera.position, prevCamPos);
