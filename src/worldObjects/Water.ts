@@ -1,10 +1,12 @@
 import {
   type BufferGeometry,
   type Camera,
+  Color,
   type Group,
   Material,
   type PerspectiveCamera,
   type Scene,
+  ShaderChunk,
   ShaderMaterial,
   type WebGLRenderer,
 } from "three";
@@ -26,7 +28,7 @@ export default class Water {
     const reflector = new Reflector(waterGeometry, {
       textureWidth: 512,
       textureHeight: 512,
-      color: 0x7788aa,
+      color: 0xffffff,
     });
     reflector.position.y = 1 / 16;
     this.visuals = reflector;
@@ -34,10 +36,34 @@ export default class Water {
       if (reflector.material instanceof Material) {
         reflector.material.onBeforeCompile = (shader) => {
           shader.uniforms.uTime = uniformTime;
+
+          // // Ensure camera position is available
+          // shader.uniforms.cameraPosition = shader.uniforms.cameraPosition || {
+          //   value: camera.position,
+          // };
+
+          // Water packed:
+          // uWaterAbsorbPack: x=level, y=absorbR, z=absorbG, w=scatterR
+          const wapScale = 0.25;
+          shader.uniforms.uWaterAbsorbPack = {
+            value: { x: 0.0, y: 0.22 * wapScale, z: 0.08 * wapScale, w: 0.02 * wapScale },
+          };
+          // uWaterScatterPack: xyz=scatterRGB, w=unused (backscatter uses xyz)
+          const wspScale = 0.25;
+          shader.uniforms.uWaterScatterPack = {
+            value: { x: 0.02 * wspScale, y: 0.03 * wspScale, z: 0.08 * wspScale, w: 0.0 },
+          };
+          const wcScale = 2;
+          shader.uniforms.uWaterColor = {
+            value: new Color(0.05 * wcScale, 0.2 * wcScale, 0.2 * wcScale),
+          };
+
+          console.log("logdepthbuf_fragment", ShaderChunk.logdepthbuf_fragment);
           shader.uniforms.uDistortionScale = uniformDistortionScale;
           shader.vertexShader = shader.vertexShader.replace(
             "void main() {",
             `
+              // uniform vec3 cameraPosition;
 							#include <normal_pars_vertex>
 							varying vec3 vWorldPosition;
 							void main() {
@@ -59,6 +85,27 @@ export default class Water {
 						#include <common>
 						#include <normal_pars_fragment>
 						varying vec3 vWorldPosition;
+
+            uniform vec4 uWaterAbsorbPack;// x=level, y=absorbR, z=absorbG, w=scatterR
+            uniform vec4 uWaterScatterPack;// xyz=scatterRGB
+            uniform vec3 uWaterColor;
+
+            vec3 waterAbsorptionFactor(float depth) {
+              float d = max(depth, 0.0);
+              vec3 k = vec3(uWaterAbsorbPack.y, uWaterAbsorbPack.z, max(uWaterAbsorbPack.z * 0.5, 0.01));
+              return exp(-k * d);
+            }
+
+            vec3 waterBackscatter(vec3 sigma_s, vec3 waterColor, float L) {
+              float len = max(L, 0.0);
+              return waterColor * (vec3(1.0) - exp(-sigma_s * len));
+            }
+
+            vec3 downwellingAttenuation(float camDepth) {
+              float d = max(camDepth, 0.0);
+              vec3 k = vec3(uWaterAbsorbPack.y, uWaterAbsorbPack.z, max(uWaterAbsorbPack.z * 0.5, 0.01));
+              return exp(-k * d);
+            }
 
 						float mod289(float x){return x - floor(x * (1.0 / 289.0)) * 289.0;}
 						vec4 mod289(vec4 x){return x - floor(x * (1.0 / 289.0)) * 289.0;}
@@ -114,9 +161,45 @@ export default class Water {
 						vec4 refractColor = texture2D( tDiffuse2, vec2( 1.0 - uvRefract.x, uvRefract.y ) );
 						vec4 reflectColor = texture2D( tDiffuse, uvReflect );
 						vec4 base = mix(reflectColor, refractColor, abs(reflectVec.y));
-						`
-            );
+            
 
+        // Compute underwater segment length along the view ray
+        vec3 camPos = cameraPosition;
+        vec3 toFrag = vWorldPosition - camPos;
+        float rayLen = length(toFrag);
+        float waterLevel = uWaterAbsorbPack.x;
+        float camY = camPos.y;
+        float fragY = vWorldPosition.y;
+        vec3 rayDir = (rayLen > 0.0) ? toFrag / max(rayLen, 1e-6) : vec3(0.0, -1.0, 0.0);
+
+        float denom = rayDir.y;
+
+        float waterSeg = waterLevel > camY ? rayLen : 0.01;
+        float camDepthBelow = max(waterLevel - camY, 0.0);
+        vec3 attenColor = uWaterColor * downwellingAttenuation(camDepthBelow);
+        vec3 inScattering = waterBackscatter(uWaterScatterPack.xyz, attenColor, waterSeg * waterSeg);
+
+        // Apply water absorption along only the underwater portion
+        vec3 k = vec3(uWaterAbsorbPack.y, uWaterAbsorbPack.z, max(uWaterAbsorbPack.z * 0.5, 0.01));
+        vec3 transmittance = exp(-k * max(waterSeg, 0.0));
+        transmittance *= transmittance * transmittance;
+						`
+            )
+            .replace(
+              `gl_FragColor = vec4( blendOverlay( base.rgb, color ), 1.0 );`,
+              `gl_FragColor = vec4( base.rgb , 1.0 );`
+              // `gl_FragColor = vec4( vec3(waterSeg * 0.005, waterSeg * 0.0025, waterSeg * 0.00125) , 1.0 );`
+            )
+            // .replace(`#include <tonemapping_fragment>`,``)
+            .replace(
+              `#include <colorspace_fragment>`,
+              `
+              #include <colorspace_fragment>
+              gl_FragColor.rgb *= transmittance;
+              gl_FragColor.rgb = gl_FragColor.rgb * (vec3(1.0)-inScattering) + inScattering;
+              `
+            );
+          console.log(shader.fragmentShader);
           resolve();
         };
         const matUuid = generateUUID();

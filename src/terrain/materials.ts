@@ -10,6 +10,7 @@ import {
 import { loadTex } from "./loadTex";
 import { ProbeManager } from "../lighting/ProbeManager";
 import { OVERDRAW_TEST } from "../overrides";
+import { ShaderChunk } from "three";
 
 export function makeTerrainMaterial(
   cameraPosition: Vector3,
@@ -124,6 +125,25 @@ export function makeTerrainMaterial(
       };
     }
 
+    const lights_fragment_maps_custom = ShaderChunk.lights_fragment_maps
+      .split(`iblIrradiance += getIBLIrradiance( geometryNormal );`)
+      .join(`iblIrradiance += getIBLIrradiance( geometryNormal ) * transmittance;`)
+      .replace(
+        `radiance += getIBLRadiance( geometryViewDir, geometryNormal, material.roughness );`,
+        `radiance += getIBLRadiance( geometryViewDir, geometryNormal, material.roughness ) * transmittance;`
+      );
+
+    console.log(lights_fragment_maps_custom);
+
+    const lights_fragment_begin_custom = ShaderChunk.lights_fragment_begin.replace(
+      `getDirectionalLightInfo( directionalLight, directLight );`,
+      `getDirectionalLightInfo( directionalLight, directLight );
+          directLight.color *= transmittance;`
+    );
+    console.log("lights_fragment_begin_custom", lights_fragment_begin_custom);
+    console.log("lights_fragment_maps", ShaderChunk.lights_fragment_maps);
+    console.log("lights_physical_pars_fragment", ShaderChunk.lights_physical_pars_fragment);
+    console.log(shader.fragmentShader);
     shader.vertexShader = shader.vertexShader
       .replace(
         "#include <common>",
@@ -178,7 +198,13 @@ export function makeTerrainMaterial(
         `
       );
 
+    // console.log(ShaderChunk.envmap_physical_pars_fragment)
     shader.fragmentShader = shader.fragmentShader
+      .replace(
+        `vec3 totalSpecular = reflectedLight.directSpecular + reflectedLight.indirectSpecular;`,
+        `
+      vec3 totalSpecular = reflectedLight.directSpecular + reflectedLight.indirectSpecular;`
+      )
       .replace(
         "#include <common>",
         `
@@ -568,43 +594,6 @@ export function makeTerrainMaterial(
       .replace(
         `#include <lights_fragment_begin>`,
         `
-        #include <lights_fragment_begin>
-        
-        #ifdef USE_PROBES
-        // Indirect lighting from probe atlas
-        // vec3 probePos = vWorldPos;
-        // vec3 probePos = vWorldPos + normal * 4.0;
-        vec3 probePos = vWorldPos + (vWorldNormal + mapN) * 4.0;
-        vec3 irr = sampleIndirectIrradiance(probePos);
-        irradiance += irr;
-        #endif
-        `
-      )
-      .replace(
-        `#include <lights_fragment_end>`,
-        `
-        #include <lights_fragment_end>
-
-
-        // // Indirect lighting from probe atlas
-        // // vec3 probePos = vWorldPos;
-        // vec3 probePos = vWorldPos + (vWorldNormal + mapN) * 4.0;
-        // vec3 irr = sampleIndirectIrradiance(probePos);
-        // irradiance += irr;
-        // // reflectedLight.indirectDiffuse += irr;
-        vec3 sandSpec = vec3(mix(1.0, 10.0/dist, tSand));
-        vec3 aoGreen = mix(vec3(mix(ao, aoCustom, 0.5), aoCustom, ao), vec3(0.2), (1.0-ao) * 0.4);
-        // aoGreen = vec3(vTrunkMask);
-        reflectedLight.directDiffuse *= aoGreen;
-        reflectedLight.indirectDiffuse *= aoGreen;
-        reflectedLight.directSpecular *= sandSpec * aoGreen;
-        reflectedLight.indirectSpecular *= sandSpec * aoGreen;
-
-        `
-      )
-      .replace(
-        "#include <fog_fragment>",
-        `
 
         // Compute underwater segment length along the view ray
         vec3 camPos = cameraPosition;
@@ -663,11 +652,51 @@ export function makeTerrainMaterial(
           vec3 waterFilter = mix(vec3(1.0), attenDown, depthFactor);
           transmittance *= waterFilter;
         }
+          transmittance *= transmittance * transmittance * transmittance * transmittance;
         
+        ${lights_fragment_begin_custom}
+        
+        #ifdef USE_PROBES
+        // Indirect lighting from probe atlas
+        // vec3 probePos = vWorldPos;
+        // vec3 probePos = vWorldPos + normal * 4.0;
+        vec3 probePos = vWorldPos + (vWorldNormal + mapN) * 4.0;
+        vec3 irr = sampleIndirectIrradiance(probePos);
+        irradiance += irr;
+        #endif
+        `
+      )
+      .replace(`#include <lights_fragment_maps>`, lights_fragment_maps_custom)
+      .replace(
+        `#include <lights_fragment_end>`,
+        `
+        #include <lights_fragment_end>
+
+
+        // // Indirect lighting from probe atlas
+        // // vec3 probePos = vWorldPos;
+        // vec3 probePos = vWorldPos + (vWorldNormal + mapN) * 4.0;
+        // vec3 irr = sampleIndirectIrradiance(probePos);
+        // irradiance += irr;
+        // // reflectedLight.indirectDiffuse += irr;
+        vec3 sandSpec = vec3(mix(1.0, 10.0/dist, tSand));
+        vec3 aoGreen = mix(vec3(mix(ao, aoCustom, 0.5), aoCustom, ao), vec3(0.2), (1.0-ao) * 0.4);
+        // aoGreen = vec3(vTrunkMask);
+        reflectedLight.directDiffuse *= aoGreen;
+        reflectedLight.indirectDiffuse *= aoGreen;
+        reflectedLight.directSpecular *= sandSpec * aoGreen;
+        reflectedLight.indirectSpecular *= sandSpec * aoGreen;
+
+        `
+      )
+      .replace(
+        "#include <fog_fragment>",
+        `
+
         // Water backscatter for the underwater portion of the view ray
         float camDepthBelow = max(waterLevel - camY, 0.0);
         vec3 attenColor = uWaterColor * downwellingAttenuation(camDepthBelow);
-        vec3 inScattering = waterBackscatter(uWaterScatterPack.xyz, attenColor, waterSeg);
+        vec3 inScattering = waterBackscatter(uWaterScatterPack.xyz, attenColor, waterSeg * waterSeg);
 
 
         vec3 dirF = (dist > 0.0) ? toFragF / dist : vec3(0.0);
@@ -692,21 +721,26 @@ export function makeTerrainMaterial(
         if (camAbove && fragAbove) {
           gl_FragColor.rgb = mix(gl_FragColor.rgb, fogCol, fogFac);
         } else if (camAbove && !fragAbove) {
-          gl_FragColor.rgb *= transmittance;
-          gl_FragColor.rgb += inScattering;
+          // gl_FragColor.rgb *= transmittance;
+          gl_FragColor.rgb = gl_FragColor.rgb * (vec3(1.0)-inScattering) + inScattering;
+          // gl_FragColor.rgb += inScattering;
           gl_FragColor.rgb = mix(gl_FragColor.rgb, fogCol, fogFac);
         } else if (!camAbove && fragAbove) {
           gl_FragColor.rgb = mix(gl_FragColor.rgb, fogCol, fogFac);
-          gl_FragColor.rgb *= transmittance;
-          gl_FragColor.rgb += inScattering;
+          // gl_FragColor.rgb *= transmittance;
+          gl_FragColor.rgb = gl_FragColor.rgb * (vec3(1.0)-inScattering) + inScattering;
+          // gl_FragColor.rgb += inScattering;
         } else {
-          gl_FragColor.rgb *= transmittance;
-          gl_FragColor.rgb += inScattering;
+          // gl_FragColor.rgb *= transmittance;
+          gl_FragColor.rgb = gl_FragColor.rgb * (vec3(1.0)-inScattering) + inScattering;
+          // gl_FragColor.rgb += inScattering;
         }
           // gl_FragColor.rgb = tbn * 0.5 + 0.5;
           // gl_FragColor.rgb = (tbn * vWorldNormal) * 0.5 + 0.5;
           // gl_FragColor.rgb = (vWorldNormal + mapN) * 0.5 + 0.5;
           // gl_FragColor.rgb = mapN * 0.5 + 0.5;
+          
+          // gl_FragColor = vec4( vec3(waterSeg * 0.005, waterSeg * 0.0025, waterSeg * 0.00125) , 1.0 );
 
           // normal = normalize( tbn * mapN );
 

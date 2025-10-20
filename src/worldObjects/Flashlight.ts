@@ -12,7 +12,7 @@ export default class Flashlight {
   aim: Vector3;
   // Flashlight (SpotLight) in scene (not parented to camera) but follows it
   constructor(private camera: PerspectiveCamera) {
-    const flashlight = new SpotLight(0xffffff, 15, 10, Math.PI / 8, 0.35, 0.5);
+    const flashlight = new SpotLight(0xffffff, 15, 30, Math.PI / 8, 0.35, 2);
     flashlight.name = "CameraFlashlight";
     flashlight.castShadow = true;
     flashlight.shadow.mapSize.set(1024, 1024);
