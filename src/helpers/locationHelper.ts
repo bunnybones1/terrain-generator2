@@ -2,6 +2,8 @@ import { findIslandSpawn } from "../findIslandSpawn";
 import FirstPersonController from "../FirstPersonController";
 import { TerrainSampler } from "../terrain/TerrainSampler";
 
+const SPAWN_SEED = 2;
+
 export function initLocationHelper(
   firstPersonController: FirstPersonController,
   terrainSampler: TerrainSampler
@@ -53,7 +55,7 @@ export function initLocationHelper(
     setXZAInURL(initialXZA.x, initialXZA.z, angle);
   } else {
     // if no URL params, use spawn and seed URL
-    const spawn = findIslandSpawn(terrainSampler.data, spawnSeed);
+    const spawn = findIslandSpawn(terrainSampler.data, SPAWN_SEED);
     firstPersonController.setLocation(spawn.x, spawn.z, spawn.angle);
     setXZAInURL(spawn.x, spawn.z, spawn.angle);
   }
