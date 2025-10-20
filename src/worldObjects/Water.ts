@@ -1,15 +1,11 @@
 import {
   type BufferGeometry,
   type Camera,
-  CircleGeometry,
   Color,
   ConeGeometry,
-  DoubleSide,
   type Group,
   Material,
   Matrix4,
-  Mesh,
-  MeshBasicMaterial,
   type PerspectiveCamera,
   type Scene,
   ShaderMaterial,
@@ -19,9 +15,8 @@ import {
 import { Reflector } from "three/addons/objects/Reflector.js";
 import { Refractor } from "three/addons/objects/Refractor.js";
 import { generateUUID } from "three/src/math/MathUtils";
-import { getPlaneGeometry } from "./geometry/planeGeometry";
 import { uniformTime } from "./materials/globalUniforms/time";
-import { lerp, remap } from "../utils/math";
+import { lerp } from "../utils/math";
 
 export default class Water {
   private uniformDistortionScale: { value: Vector2 };
@@ -75,19 +70,6 @@ export default class Water {
       textureHeight: 512,
       color: 0xffffff,
     });
-
-    // const debug = new Mesh(
-    //   waterGeometry,
-    //   new MeshBasicMaterial({
-    //     wireframe: true,
-    //     color: 0xff0000,
-    //     depthTest: false,
-    //     depthWrite: false,
-    //     side: DoubleSide,
-    //   })
-    // );
-    // debug.renderOrder = 10000;
-    // reflector.add(debug);
 
     reflector.position.y = 1 / 16;
     this.visuals = reflector;

@@ -35,6 +35,7 @@ import FPSCounter from "./helpers/FPSCounter";
 import initKeyboardShortcuts from "./helpers/keyboardShortcuts";
 import ScatteredObjectManager from "./ScatteredObjectManager";
 import { remapClamp } from "./utils/math";
+import { updateUIDigRadius } from "./helpers/ui/updateUIDigRadius";
 // import { findIslandSpawn } from "./findIslandSpawn";
 
 // 3D area container
@@ -262,8 +263,7 @@ if (AMBIENT_LIGHT_MODE === "hemi") {
 }
 
 // Initialize UI dig radius display
-const digSpan = document.getElementById("dig-radius");
-if (digSpan) digSpan.textContent = `${firstPersonController.digRadius}`;
+updateUIDigRadius(firstPersonController.digRadius);
 
 const scatMan = new ScatteredObjectManager(scene, terrainSampler, terrainMat, camera);
 
@@ -277,7 +277,7 @@ logTime("ready to start rendering");
 setInterval(() => {
   const span = document.getElementById("cam-height");
   if (span) span.textContent = `Ascend / Descend (${camera.position.y.toFixed(2)}m)`;
-}, 100);
+}, 500);
 
 const flashlight = new Flashlight(camera);
 scene.add(flashlight.light);
