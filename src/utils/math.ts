@@ -11,6 +11,10 @@ export function remap(a: number, b: number, v: number): number {
   return (v - a) / (b - a);
 }
 
+export function lerp(a: number, b: number, v: number): number {
+  return a + (b - a) * v;
+}
+
 const result = [0, 0] as [number, number];
 // simple hash to jitter point within cell
 export function hash2(i: number, j: number) {

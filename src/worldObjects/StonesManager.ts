@@ -17,6 +17,9 @@ import { TerrainSampler } from "../terrain/TerrainSampler";
 import { PRNG } from "../utils/PRNG";
 import { buildStoneLODGeometries } from "./geometry/stone";
 import { DirtyAABB } from "../terrain/TerrainData";
+import { packKey16 } from "../helpers/key16";
+
+const __aabb = new Box3(new Vector3(), new Vector3());
 
 export interface StonesManagerConfig {
   cellSize: number;
@@ -60,7 +63,8 @@ export class StonesManager {
   // Spatial cell cache
   private cells = new Map<string, Cell>();
   // Metadata cache for cells (coordinates and height AABB), built proactively
-  private cellMeta = new Map<string, CellMeta>();
+  // Use packed 16-bit per axis numeric key for performance
+  private cellMetaNum = new Map<number, CellMeta>();
 
   // LOD buckets
   private lodGeoms: IcosahedronGeometry[] = [];
@@ -180,8 +184,8 @@ export class StonesManager {
   }
 
   private getOrCreateMeta(cx: number, cz: number): CellMeta {
-    const k = this.key(cx, cz);
-    const existing = this.cellMeta.get(k);
+    const k = packKey16(cx, cz);
+    const existing = this.cellMetaNum.get(k);
     if (existing) return existing;
 
     const cs = this.cellSize;
@@ -209,7 +213,7 @@ export class StonesManager {
       minY,
       maxY,
     };
-    this.cellMeta.set(k, meta);
+    this.cellMetaNum.set(k, meta);
     return meta;
   }
 
@@ -280,8 +284,9 @@ export class StonesManager {
     const maxZ = (cz + 1) * cs;
 
     const meta = this.getOrCreateMeta(cx, cz);
-    const aabb = new Box3(new Vector3(minX, meta.minY, minZ), new Vector3(maxX, meta.maxY, maxZ));
-    return frustum.intersectsBox(aabb);
+    __aabb.min.set(minX, meta.minY, minZ);
+    __aabb.max.set(maxX, meta.maxY, maxZ);
+    return frustum.intersectsBox(__aabb);
   }
 
   private ensureCellsAround(camera: PerspectiveCamera) {

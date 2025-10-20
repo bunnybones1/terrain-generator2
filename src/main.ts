@@ -55,9 +55,11 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = 2;
 view3d.appendChild(renderer.domElement);
 
-const sunVector = new Vector3(1, 1, 0);
+let sunAngle = 0.15 * Math.PI * 2;
+const sunVector = new Vector3(Math.cos(sunAngle), Math.sin(sunAngle), 0);
 // Sun rotation speed around Z axis (radians per second)
-const SUN_ANGULAR_SPEED = -0.05;
+const SUN_ANGULAR_SPEED = 0.005;
+const SUN_ANGULAR_THRESHOLD = 0.005;
 
 const sunColorDefault = new Color(1000, 900, 600);
 const sunColor = sunColorDefault.clone();
@@ -274,7 +276,7 @@ logTime("ready to start rendering");
 
 setInterval(() => {
   const span = document.getElementById("cam-height");
-  if (span) span.textContent = `${camera.position.y.toFixed(2)}`;
+  if (span) span.textContent = `Ascend / Descend (${camera.position.y.toFixed(2)}m)`;
 }, 100);
 
 const flashlight = new Flashlight(camera);
@@ -284,6 +286,8 @@ scene.add(flashlight.lightTarget);
 initKeyboardShortcuts(firstPersonController, flashlight);
 
 const fpsCounter = new FPSCounter();
+
+let lastSunAngleUpdate = 0;
 
 let frameCount = 0;
 const frameTimesToLog = 20;
@@ -329,15 +333,9 @@ function loop() {
   // Animate sun vector around Z axis and update background env
   {
     // Rotate sunVector on Z axis
-    const angle = SUN_ANGULAR_SPEED * dt;
-    const cosA = Math.cos(angle);
-    const sinA = Math.sin(angle);
-    const x = sunVector.x;
-    const y = sunVector.y;
-    // Standard 2D rotation in XY plane around Z
-    sunVector.x = x * cosA - y * sinA;
-    sunVector.y = x * sinA + y * cosA;
+    sunAngle += SUN_ANGULAR_SPEED * dt;
 
+    sunVector.set(Math.cos(sunAngle), Math.sin(sunAngle), 0);
     // Update sun ball to match new sunVector
     sunBall.position.copy(sunVector).normalize().multiplyScalar(9);
     sunBall.lookAt(new Vector3());
@@ -362,7 +360,7 @@ function loop() {
       sunColor.lerp(duskRed, horizonProximity);
 
       sunColor.multiplyScalar(remapClamp(-0.1, -0.05, y));
-      dirLight.color.copy(sunColor).multiplyScalar(0.0015);
+      dirLight.color.copy(sunColor).multiplyScalar(0.0005);
 
       // // Apply fade below horizon
       // sunColor.multiplyScalar(smooth);
@@ -407,15 +405,19 @@ function loop() {
 
     // Regenerate environment map from bgScene and assign to scene.background
     if (!OVERDRAW_TEST) {
-      if (envMap) envMap.texture.dispose();
-      envMap = envMaker.fromScene(bgScene, 0.0075);
-      scene.background = envMap.texture;
+      if (sunAngle - lastSunAngleUpdate > SUN_ANGULAR_THRESHOLD) {
+        lastSunAngleUpdate = sunAngle;
 
-      // If terrain material uses envmap mode, update its envMap reference
-      if (AMBIENT_LIGHT_MODE === "envmap") {
-        // terrainMat is used by waterSphere and terrain; ensure it sees the new env
-        terrainMat.envMap = envMap.texture;
-        // terrainMat.needsUpdate = true;
+        if (envMap) envMap.texture.dispose();
+        envMap = envMaker.fromScene(bgScene, 0.0075);
+        scene.background = envMap.texture;
+
+        // If terrain material uses envmap mode, update its envMap reference
+        if (AMBIENT_LIGHT_MODE === "envmap") {
+          // terrainMat is used by waterSphere and terrain; ensure it sees the new env
+          terrainMat.envMap = envMap.texture;
+          // terrainMat.needsUpdate = true;
+        }
       }
     }
   }
