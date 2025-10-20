@@ -2,6 +2,8 @@ precision lowp float;
 
 varying vec2 vUv;
 
+uniform vec3 uCloudColor;
+
 float mod289(float x){return x - floor(x * (1.0 / 289.0)) * 289.0;}
 vec4 mod289(vec4 x){return x - floor(x * (1.0 / 289.0)) * 289.0;}
 vec4 perm(vec4 x){return mod289(((x * 34.0) + 1.0) * x);}
@@ -44,6 +46,7 @@ void main() {
   noiseSample += noise(uvw5) * 0.5;
   noiseSample += noise(uvw6) * 0.35;
   noiseSample *= 0.25;
+  vec3 cloudColor = uCloudColor;
   float cloudStr = max(0.0, noiseSample - 0.45);
-  gl_FragColor = mix(vec4(3.0, 3.0, 3.0, 0.0), vec4(-3.0, -2.0, 0.0, 2.0), cloudStr);
+  gl_FragColor = mix(vec4(cloudColor * 3.0, 0.0), vec4(cloudColor * -4.0, 2.0), cloudStr);
 }

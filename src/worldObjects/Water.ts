@@ -21,7 +21,10 @@ export default class Water {
   visuals: Reflector;
   refractor: Refractor;
   private playerWaterSide = 0;
-  constructor(private camera: PerspectiveCamera) {
+  constructor(
+    private camera: PerspectiveCamera,
+    waterColor: Color
+  ) {
     const uniformDistortionScale = { value: new Vector2(1, 1) };
     this.uniformDistortionScale = uniformDistortionScale;
     const waterGeometry = getPlaneGeometry(30000, 30000, 40, 40);
@@ -53,9 +56,8 @@ export default class Water {
           shader.uniforms.uWaterScatterPack = {
             value: { x: 0.02 * wspScale, y: 0.03 * wspScale, z: 0.08 * wspScale, w: 0.0 },
           };
-          const wcScale = 2;
           shader.uniforms.uWaterColor = {
-            value: new Color(0.05 * wcScale, 0.2 * wcScale, 0.2 * wcScale),
+            value: waterColor,
           };
 
           shader.uniforms.uDistortionScale = uniformDistortionScale;

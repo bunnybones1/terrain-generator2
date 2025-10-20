@@ -34,6 +34,7 @@ import Flashlight from "./worldObjects/Flashlight";
 import FPSCounter from "./helpers/FPSCounter";
 import initKeyboardShortcuts from "./helpers/keyboardShortcuts";
 import ScatteredObjectManager from "./ScatteredObjectManager";
+import { remapClamp } from "./utils/math";
 // import { findIslandSpawn } from "./findIslandSpawn";
 
 // 3D area container
@@ -54,36 +55,56 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = 2;
 view3d.appendChild(renderer.domElement);
 
-const sunVector = new Vector3(-1, 1, 1);
+const sunVector = new Vector3(1, 1, 0);
+// Sun rotation speed around Z axis (radians per second)
+const SUN_ANGULAR_SPEED = -0.05;
+
+const sunColorDefault = new Color(1000, 900, 600);
+const sunColor = sunColorDefault.clone();
+// Define dusk hues
+const duskYellow = new Color(80, 80, 0);
+const duskRed = new Color(50, 0, 0);
 
 const worldColorTop = new Color(0.3, 0.5, 1);
-const worldColorBottom = new Color(0.4, 0.25, 0.1);
+const worldColorBottomDefault = new Color(0.4, 0.25, 0.1);
+const worldColorBottom = worldColorBottomDefault.clone();
+const fogColor = worldColorTop;
+const wcScale = 2;
+const waterColorDefault = new Color(0.05 * wcScale, 0.2 * wcScale, 0.2 * wcScale);
+const waterColor = waterColorDefault.clone();
+
+// Preset gradient colors for sky top across the day
+const SKY_TOP_DAY = new Color(0.35, 0.6, 1.0); // bright blue
+const SKY_TOP_DUSK1 = new Color(1.2, 0.5, 0.15); // orange
+const SKY_TOP_DUSK2 = new Color(0.9, 0.15, 0.1); // red
+const SKY_TOP_NIGHT = new Color(0.003, 0.01, 0.03); // very dark blue
 
 const bgScene = new Scene();
-const sunBall = new Mesh(
-  new CircleGeometry(0.5, 32),
-  new MeshBasicMaterial({
-    color: new Color(1000, 900, 600),
-    side: DoubleSide,
-  })
-);
+const sunBallMaterial = new MeshBasicMaterial({
+  color: sunColor, // base sun color at/above horizon
+  side: DoubleSide,
+});
+sunBallMaterial.color = sunColor;
+const sunBall = new Mesh(new CircleGeometry(0.5, 32), sunBallMaterial);
 sunBall.position.copy(sunVector).normalize().multiplyScalar(9);
 sunBall.lookAt(new Vector3());
 bgScene.add(sunBall);
-const bgSphere = new Mesh(
-  getSphereGeometry(1, 16, 64),
-  new HemisphereAmbientMaterial(worldColorTop, worldColorBottom)
+const groundSkyAmbientMat = new HemisphereAmbientMaterial(
+  worldColorTop,
+  worldColorBottom,
+  fogColor
 );
+const bgSphere = new Mesh(getSphereGeometry(1, 16, 64), groundSkyAmbientMat);
 bgSphere.scale.setScalar(10);
 bgScene.add(bgSphere);
-const cloudPlane = new Mesh(getPlaneGeometry(1, 1), new CloudPlaneMaterial());
+const cloudPlane = new Mesh(getPlaneGeometry(1, 1), new CloudPlaneMaterial(worldColorTop));
 cloudPlane.scale.setScalar(10);
 cloudPlane.position.y = 0.1;
 cloudPlane.rotation.x = Math.PI * 0.5;
 bgScene.add(cloudPlane);
 
 const envMaker = new PMREMGenerator(renderer);
-const envMap = envMaker.fromScene(bgScene, 0.0075);
+let envMap = envMaker.fromScene(bgScene, 0.0075);
 
 const scene = new Scene();
 if (OVERDRAW_TEST) {
@@ -110,7 +131,7 @@ dirLight.castShadow = true;
 // const oceanSize = 40000; // meters
 // const oceanGeom = new PlaneGeometry(oceanSize, oceanSize, 40, 40);
 // oceanGeom.rotateX(-Math.PI / 2); // make it horizontal
-const oceanManager = new Water(camera);
+const oceanManager = new Water(camera, waterColor);
 const ocean = oceanManager.visuals;
 // ocean.position.set(0, 0, 0);
 // ocean.castShadow = false;
@@ -173,6 +194,8 @@ debugPlane.updateMatrix();
 
 const terrainMat = makeTerrainMaterial(
   camera.position,
+  fogColor,
+  waterColor,
   AMBIENT_LIGHT_MODE === "envmap" ? envMap.texture : undefined,
   AMBIENT_LIGHT_MODE === "probes" ? probeManager : undefined
 );
@@ -302,6 +325,100 @@ function loop() {
 
   // Update camera matrices so attached HUD elements render correctly
   camera.updateMatrixWorld(true);
+
+  // Animate sun vector around Z axis and update background env
+  {
+    // Rotate sunVector on Z axis
+    const angle = SUN_ANGULAR_SPEED * dt;
+    const cosA = Math.cos(angle);
+    const sinA = Math.sin(angle);
+    const x = sunVector.x;
+    const y = sunVector.y;
+    // Standard 2D rotation in XY plane around Z
+    sunVector.x = x * cosA - y * sinA;
+    sunVector.y = x * sinA + y * cosA;
+
+    // Update sun ball to match new sunVector
+    sunBall.position.copy(sunVector).normalize().multiplyScalar(9);
+    sunBall.lookAt(new Vector3());
+
+    // Tint sun to yellow/red near horizon, then fade to black below horizon
+    {
+      // visibility factor based on height (y) relative to horizon (0)
+      // smoothstep: 0 below -0.1, 1 above +0.1, smooth transition in between
+      const y = sunVector.y;
+      // const edge0 = -0.1;
+      // const edge1 = +0.1;
+      // const t = Math.max(0, Math.min(1, (y - edge0) / (edge1 - edge0)));
+      // const smooth = t * t * (3 - 2 * t);
+
+      // Compute horizon proximity (0 far from horizon, 1 at horizon)
+      const horizonProximity = 1 - Math.abs(Math.max(0.0, y));
+
+      // Blend yellow -> red as it gets even closer to horizon
+      sunColor.copy(sunColorDefault);
+
+      sunColor.lerp(duskYellow, horizonProximity);
+      sunColor.lerp(duskRed, horizonProximity);
+
+      sunColor.multiplyScalar(remapClamp(-0.1, -0.05, y));
+      dirLight.color.copy(sunColor).multiplyScalar(0.0015);
+
+      // // Apply fade below horizon
+      // sunColor.multiplyScalar(smooth);
+
+      // Update water color: copy default and modulate by sun color (normalized to [0..1] range)
+      const sunColor01 = sunColor.clone().multiplyScalar(1.0 / 1000.0); // normalize large sun color
+      sunColor01.multiplyScalar(0.95).addScalar(0.05);
+      waterColor.copy(waterColorDefault).multiply(sunColor01);
+    }
+
+    // Animate sky top color through day (blue) -> dusk (orange/red) -> night (dark blue)
+    {
+      // Elevation factor: -1 (deep night) to +1 (high noon) from y component
+      const y = Math.max(-1, Math.min(1, sunVector.clone().normalize().y));
+      // Map y to [0,1] dayness via smoothstep around horizon
+      const dayness = (() => {
+        const edge0 = -0.1;
+        const edge1 = +0.1;
+        const t = Math.max(0, Math.min(1, (y - edge0) / (edge1 - edge0)));
+        return t * t * (3 - 2 * t); // smoothstep
+      })();
+
+      // Also compute a dusk factor strongest near horizon regardless of above/below
+      const horizonProximity = 1 - Math.min(1, Math.abs(y) / 0.3); // 1 at |y|=0, 0 at |y|>=0.3
+      const duskStrength = Math.max(0, horizonProximity);
+
+      // Blend: base between night and day, then add dusk hues near horizon
+      const baseSky = SKY_TOP_NIGHT.clone().lerp(SKY_TOP_DAY, dayness);
+
+      // Two-phase dusk: orange then red as sun approaches horizon
+      const duskColor = SKY_TOP_DUSK1.clone().lerp(
+        SKY_TOP_DUSK2,
+        Math.max(0, 0.5 - Math.abs(y)) * 2
+      );
+      const skyTop = baseSky.lerp(duskColor, duskStrength * (1 - Math.abs(y) * 2 + 1) * 0.5);
+
+      // Apply to hemisphere material top color
+      worldColorTop.copy(skyTop);
+      worldColorBottom.copy(worldColorBottomDefault).multiply(sunColor).multiplyScalar(0.0015);
+      // groundSkyAmbientMat.uniformsNeedUpdate = true;
+    }
+
+    // Regenerate environment map from bgScene and assign to scene.background
+    if (!OVERDRAW_TEST) {
+      if (envMap) envMap.texture.dispose();
+      envMap = envMaker.fromScene(bgScene, 0.0075);
+      scene.background = envMap.texture;
+
+      // If terrain material uses envmap mode, update its envMap reference
+      if (AMBIENT_LIGHT_MODE === "envmap") {
+        // terrainMat is used by waterSphere and terrain; ensure it sees the new env
+        terrainMat.envMap = envMap.texture;
+        // terrainMat.needsUpdate = true;
+      }
+    }
+  }
 
   // Make dirLight follow the camera
   {

@@ -14,6 +14,8 @@ import { ShaderChunk } from "three";
 
 export function makeTerrainMaterial(
   cameraPosition: Vector3,
+  fogColor: Color,
+  waterColor: Color,
   envMap?: Texture,
   probeManager?: ProbeManager
 ) {
@@ -98,13 +100,12 @@ export function makeTerrainMaterial(
     shader.uniforms.uWaterScatterPack = {
       value: { x: 0.02 * wspScale, y: 0.03 * wspScale, z: 0.08 * wspScale, w: 0.0 },
     };
-    const wcScale = 2;
     shader.uniforms.uWaterColor = {
-      value: new Color(0.05 * wcScale, 0.2 * wcScale, 0.2 * wcScale),
+      value: waterColor,
     };
 
     // Air fog
-    shader.uniforms.uAirFogColor = { value: new Color(0.9, 0.9, 1.0) };
+    shader.uniforms.uAirFogColor = { value: fogColor };
     shader.uniforms.uAirFogDensity = { value: 0.0002 };
 
     // UV de-repetition defaults
@@ -747,6 +748,10 @@ export function makeTerrainMaterial(
         #endif
         `
       );
+    // .replace(
+    //   `#include <colorspace_fragment>`,
+    //   ``
+    // );
   };
 
   return mat;
