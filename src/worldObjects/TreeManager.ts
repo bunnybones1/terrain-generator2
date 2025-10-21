@@ -12,6 +12,7 @@ import {
   Scene,
   Vector3,
   Euler,
+  ShaderMaterial,
 } from "three";
 import { TerrainSampler } from "../terrain/TerrainSampler";
 import { PRNG } from "../utils/PRNG";
@@ -74,6 +75,7 @@ export class TreeManager {
     private scene: Scene,
     private terrain: TerrainSampler,
     private material: MeshStandardMaterial,
+    private depthMaterial: ShaderMaterial,
     seed: number,
     config: TreeManagerConfig
   ) {
@@ -109,6 +111,7 @@ export class TreeManager {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.frustumCulled = false;
+      mesh.customDepthMaterial = depthMaterial;
 
       // Large bounds to avoid per-instance culling
       const maxRadiusMeters =

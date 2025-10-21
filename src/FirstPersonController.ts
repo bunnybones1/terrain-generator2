@@ -23,7 +23,7 @@ export default class FirstPersonController {
   pointerLocked = false;
 
   // Movement modes
-  private isFlying = false;
+  public isFlying = false;
   private lastToggleTime = 0;
 
   // Flying speed ramp state
@@ -116,16 +116,20 @@ export default class FirstPersonController {
     });
   }
 
-  setLocation(x: number, z: number, angle: number) {
+  setLocation(x: number, y: number, z: number, angle: number, isFlying: boolean) {
     // Use island spawn to set initial camera position at shoreline and yaw
     this.camera.position.x = x;
+    this.camera.position.y = y;
     this.camera.position.z = z;
     // Initialize yaw so camera faces the sea from spawn
     // Our convention: yaw rotates around Y, forward vector is (0,0,-1) at yaw=0; to face (dx,dz), yaw = atan2(dx, -dz)
     this.yaw = angle;
-    // height should be very close to 0; use sampler for consistency and add a small offset
-    const groundH0 = this.terrainSampler.getSample(x, z).baseHeight + initialHeight;
-    this.camera.position.y = Math.max(-1000, groundH0) + this.eyeHeight + 0.5;
+    this.isFlying = isFlying;
+    if (!isFlying) {
+      // height should be very close to 0; use sampler for consistency and add a small offset
+      const groundH0 = this.terrainSampler.getSample(x, z).baseHeight + initialHeight;
+      this.camera.position.y = Math.max(-1000, groundH0) + this.eyeHeight + 0.5;
+    }
 
     // Initialize smoothed position
     this.smoothedPos.copy(this.camera.position);

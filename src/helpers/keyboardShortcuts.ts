@@ -32,6 +32,18 @@ export default function initKeyboardShortcuts(
     } else if (e.key.toLowerCase() === "l") {
       // toggle flashlight
       flashlight.toggle();
+    } else if (e.key.toLowerCase() === "u") {
+      // toggle UI overlay visibility
+      const overlay = document.getElementById("ui-overlay");
+      if (overlay) {
+        // Prefer toggling display so it doesn't take layout space
+        const cur = overlay.style.display;
+        if (cur === "none") {
+          overlay.style.display = "";
+        } else {
+          overlay.style.display = "none";
+        }
+      }
     }
   });
 }

@@ -1,4 +1,12 @@
-import { BufferAttribute, BufferGeometry, Camera, Mesh, MeshStandardMaterial, Scene } from "three";
+import {
+  BufferAttribute,
+  BufferGeometry,
+  Camera,
+  Mesh,
+  MeshStandardMaterial,
+  Scene,
+  ShaderMaterial,
+} from "three";
 import { TerrainData, TileCoords } from "./TerrainData";
 
 const maxTilesPerFrame = 40;
@@ -13,7 +21,8 @@ export class TerrainRenderer {
   constructor(
     private data: TerrainData,
     private scene: Scene,
-    private material: MeshStandardMaterial
+    private material: MeshStandardMaterial,
+    private depthMaterial: ShaderMaterial
   ) {}
 
   updateAndRender(camera: Camera, visibleTiles: TileCoords[]): void {
@@ -241,9 +250,9 @@ export class TerrainRenderer {
     geo.setAttribute("invAOAndMask", new BufferAttribute(new Float32Array(invAOAndMask), 2));
     geo.setIndex(indices);
 
-    // Slope can be derived from normals in shader; no need to store as attribute
-
     const mesh = new Mesh(geo, this.material);
+    mesh.customDepthMaterial = this.depthMaterial;
+    // mesh.customDistanceMaterial = this.depthMaterial;
     // Place mesh at the tile center so local vertices cluster around origin
     mesh.position.set(cx, 0, cz);
     mesh.updateMatrixWorld();

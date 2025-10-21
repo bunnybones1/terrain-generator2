@@ -9,7 +9,7 @@ import {
 } from "three";
 import { loadTex } from "./loadTex";
 import { ProbeManager } from "../lighting/ProbeManager";
-import { OVERDRAW_TEST } from "../overrides";
+import { OVERDRAW_TEST, POWER_SHADOWS, POWER_SHADOWS_POWER } from "../overrides";
 import { ShaderChunk } from "three";
 
 export function makeTerrainMaterial(
@@ -192,8 +192,6 @@ export function makeTerrainMaterial(
         vInstanceInvAO = instanceInvAO;
         `
       );
-    console.log(shader.vertexShader);
-    console.log(shader.fragmentShader);
     shader.fragmentShader = shader.fragmentShader
       .replace(
         `vec3 totalSpecular = reflectedLight.directSpecular + reflectedLight.indirectSpecular;`,
@@ -589,6 +587,21 @@ export function makeTerrainMaterial(
           roughnessFactor = 1.0;
         }
         #include <lights_physical_fragment>`
+      )
+      .replace(
+        `#include <shadowmap_pars_fragment>`,
+        ShaderChunk.shadowmap_pars_fragment.replace(
+          `shadowCoord.z += shadowBias;`,
+          POWER_SHADOWS
+            ? `
+          //uncollapse UV from customDepthMaterial.ts
+          vec2 tmp = shadowCoord.xy * 2.0 - 1.0;
+          shadowCoord.z += shadowBias + length(tmp) * -0.0025;
+          tmp = (vec2(1.0) - pow(vec2(1.0) - abs(tmp), vec2(${POWER_SHADOWS_POWER}))) * sign(tmp);
+          shadowCoord.xy = tmp * 0.5 + 0.5;
+          `
+            : `shadowCoord.z += shadowBias;`
+        )
       )
       .replace(
         `#include <lights_fragment_begin>`,

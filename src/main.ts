@@ -12,6 +12,10 @@ import {
   MeshBasicMaterial,
   PlaneGeometry,
   HemisphereLight,
+  // BasicShadowMap,
+  // PCFShadowMap,
+  // VSMShadowMap,
+  PCFSoftShadowMap,
 } from "three";
 import { TerrainRenderer } from "./terrain/TerrainRenderer";
 import { TerrainData } from "./terrain/TerrainData";
@@ -32,6 +36,7 @@ import ScatteredObjectManager from "./ScatteredObjectManager";
 import { updateUIDigRadius } from "./helpers/ui/updateUIDigRadius";
 import Sky from "./worldObjects/Sky";
 import { easeInOut, remapClamp } from "./utils/math";
+import { makeCustomDepthMaterial } from "./terrain/customDepthMaterial";
 // import { findIslandSpawn } from "./findIslandSpawn";
 
 // 3D area container
@@ -45,17 +50,23 @@ for (const v of ["-moz-crisp-edges", "-webkit-crisp-edges", "crisp-edges", "pixe
   renderer.domElement.style.setProperty("image-rendering", v);
 }
 
+const SUN_SHADOW_SCALE = 1000;
+
 renderer.autoClear = false;
 renderer.setSize(view3d.clientWidth || window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+// renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setPixelRatio(1);
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = 2;
+// renderer.shadowMap.type = BasicShadowMap;
+// renderer.shadowMap.type = PCFShadowMap;
+renderer.shadowMap.type = PCFSoftShadowMap;
+// renderer.shadowMap.type = VSMShadowMap;
 view3d.appendChild(renderer.domElement);
 
-let sunAngle = 0.485 * Math.PI * 2;
+let sunAngle = 0.35 * Math.PI * 2;
 const sunVector = new Vector3(Math.cos(sunAngle), Math.sin(sunAngle), 0);
 // Sun rotation speed around Z axis (radians per second)
-const TIME_SPEED = 0.0025;
+const TIME_SPEED = 0.005;
 const ENVMAP_TIME_THRESHOLD = 0.00125;
 
 const sunColorDefault = new Color(1000, 900, 600);
@@ -197,14 +208,15 @@ scene.add(ocean);
 scene.add(oceanManager.refractor);
 
 // Configure shadow properties for better quality
-sunLight.shadow.mapSize.width = 2048;
-sunLight.shadow.mapSize.height = 2048;
-sunLight.shadow.camera.near = 0.5;
-sunLight.shadow.camera.far = 500;
-sunLight.shadow.bias = -0.0001;
+sunLight.shadow.mapSize.width = 4096;
+sunLight.shadow.mapSize.height = 4096;
+sunLight.shadow.camera.near = 0;
+sunLight.shadow.camera.far = SUN_SHADOW_SCALE * 4;
+sunLight.shadow.bias = 0.0001;
 
 // Initialize position; will be updated each frame
 sunLight.position.set(0, 30, 0);
+
 scene.add(sunLight);
 
 // Resize handling
@@ -256,7 +268,9 @@ const terrainMat = makeTerrainMaterial(
   AMBIENT_LIGHT_MODE === "envmap" ? envMap.texture : undefined,
   AMBIENT_LIGHT_MODE === "probes" ? probeManager : undefined
 );
-const terrainRenderer = new TerrainRenderer(terrainData, scene, terrainMat);
+
+const terrainDepthMat = makeCustomDepthMaterial();
+const terrainRenderer = new TerrainRenderer(terrainData, scene, terrainMat, terrainDepthMat);
 
 // Indirect lighting probe manager
 const terrainSampler = new TerrainSampler(terrainData);
@@ -319,7 +333,13 @@ if (AMBIENT_LIGHT_MODE === "hemi") {
 // Initialize UI dig radius display
 updateUIDigRadius(firstPersonController.digRadius);
 
-const scatMan = new ScatteredObjectManager(scene, terrainSampler, terrainMat, camera);
+const scatMan = new ScatteredObjectManager(
+  scene,
+  terrainSampler,
+  terrainMat,
+  terrainDepthMat,
+  camera
+);
 
 // Movement tracking and temp objects for instanced recycling
 const prevCamPos = new Vector3().copy(camera.position);
@@ -443,9 +463,8 @@ function loop() {
   // Make dirLight follow the camera
   {
     myLog("dirLight");
-    const offset = sunVector.clone().multiplyScalar(100);
-    const lightPos = new Vector3().copy(camera.position).add(offset);
-    sunLight.position.copy(lightPos);
+    const offset = sunVector.clone().multiplyScalar(SUN_SHADOW_SCALE * 2);
+    sunLight.position.copy(camera.position).add(offset);
     sunLight.target.position.copy(camera.position);
     sunLight.updateMatrixWorld();
     sunLight.target.updateMatrixWorld();
@@ -453,7 +472,7 @@ function loop() {
 
     // Center shadow camera around the camera for consistent coverage
     const cam = sunLight.shadow.camera;
-    const range = 100;
+    const range = SUN_SHADOW_SCALE;
     cam.left = -range;
     cam.right = range;
     cam.top = range;

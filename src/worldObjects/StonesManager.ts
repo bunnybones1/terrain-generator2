@@ -12,6 +12,7 @@ import {
   IcosahedronGeometry,
   Euler,
   InstancedBufferAttribute,
+  ShaderMaterial,
 } from "three";
 import { TerrainSampler } from "../terrain/TerrainSampler";
 import { PRNG } from "../utils/PRNG";
@@ -90,6 +91,7 @@ export class StonesManager {
     private scene: Scene,
     private terrain: TerrainSampler,
     private material: MeshStandardMaterial,
+    private depthMaterial: ShaderMaterial,
     seed: number,
     config: StonesManagerConfig
   ) {
@@ -128,6 +130,7 @@ export class StonesManager {
       mesh.instanceMatrix.setUsage(35048); // DynamicDrawUsage
       mesh.castShadow = true;
       mesh.receiveShadow = true;
+      mesh.customDepthMaterial = depthMaterial;
 
       // Disable renderer frustum culling for this instanced mesh
       mesh.frustumCulled = false;

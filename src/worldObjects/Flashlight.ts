@@ -14,9 +14,9 @@ export default class Flashlight {
   constructor(private camera: PerspectiveCamera) {
     const flashlight = new SpotLight(0xffffff, 15, 30, Math.PI / 8, 0.35, 2);
     flashlight.name = "CameraFlashlight";
-    flashlight.castShadow = true;
-    flashlight.shadow.mapSize.set(1024, 1024);
-    flashlight.shadow.bias = -0.0001;
+    // flashlight.castShadow = true;
+    // flashlight.shadow.mapSize.set(1024, 1024);
+    // flashlight.shadow.bias = -0.0001;
     // Spring-follow state for flashlight
     this.position = new Vector3().copy(camera.position);
     this.velocity = new Vector3(0, 0, 0);
