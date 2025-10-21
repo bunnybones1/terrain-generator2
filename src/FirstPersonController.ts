@@ -18,7 +18,7 @@ export default class FirstPersonController {
   pitch = -0.1;
   keys: Record<string, boolean> = {};
   velocityY = 0;
-  gravity = -25; // m/s^2
+  gravity = -85; // m/s^2
   eyeHeight = 1.5; // meters above ground
   pointerLocked = false;
 
@@ -297,17 +297,28 @@ export default class FirstPersonController {
       this.target.x += dx;
       this.target.z += dz;
 
-      // Gravity and ground collision
+      // Gravity and ground collision with restitution bounce
+      // Integrate velocity with acceleration (gravity)
       this.velocityY += this.gravity * dt;
 
       const groundH = this.terrainSampler.getSample(this.target.x, this.target.z).baseHeight;
       const targetEyeY = groundH + this.eyeHeight;
 
+      // Integrate position with current velocity
       let newY = this.camera.position.y + this.velocityY * dt;
+
+      // Collision and bounce
       if (newY < targetEyeY) {
+        // Hit ground: place at ground and bounce with 50% restitution
         newY = targetEyeY;
-        this.velocityY = 0;
+        this.velocityY = -this.velocityY * 0.25;
+
+        // If bounce is too small, stop to avoid jitter
+        if (Math.abs(this.velocityY) < 0.5) {
+          this.velocityY = 0;
+        }
       }
+
       this.target.y = newY;
     }
 
