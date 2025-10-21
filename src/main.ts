@@ -31,6 +31,7 @@ import initKeyboardShortcuts from "./helpers/keyboardShortcuts";
 import ScatteredObjectManager from "./ScatteredObjectManager";
 import { updateUIDigRadius } from "./helpers/ui/updateUIDigRadius";
 import Sky from "./worldObjects/Sky";
+import { easeInOut, remapClamp } from "./utils/math";
 // import { findIslandSpawn } from "./findIslandSpawn";
 
 // 3D area container
@@ -51,7 +52,7 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = 2;
 view3d.appendChild(renderer.domElement);
 
-let sunAngle = 0.35 * Math.PI * 2;
+let sunAngle = 0.485 * Math.PI * 2;
 const sunVector = new Vector3(Math.cos(sunAngle), Math.sin(sunAngle), 0);
 // Sun rotation speed around Z axis (radians per second)
 const TIME_SPEED = 0.0025;
@@ -180,8 +181,8 @@ const camera = new PerspectiveCamera(
 );
 camera.position.set(3, 2, 5);
 
-const dirLight = new DirectionalLight(0xffeebb, 1.5);
-dirLight.castShadow = true;
+const sunLight = new DirectionalLight(0xffeebb, 1.5);
+sunLight.castShadow = true;
 
 // Ocean plane at y = 0 (follows camera in x/z)
 // const oceanSize = 40000; // meters
@@ -196,15 +197,15 @@ scene.add(ocean);
 scene.add(oceanManager.refractor);
 
 // Configure shadow properties for better quality
-dirLight.shadow.mapSize.width = 2048;
-dirLight.shadow.mapSize.height = 2048;
-dirLight.shadow.camera.near = 0.5;
-dirLight.shadow.camera.far = 500;
-dirLight.shadow.bias = -0.0001;
+sunLight.shadow.mapSize.width = 2048;
+sunLight.shadow.mapSize.height = 2048;
+sunLight.shadow.camera.near = 0.5;
+sunLight.shadow.camera.far = 500;
+sunLight.shadow.bias = -0.0001;
 
 // Initialize position; will be updated each frame
-dirLight.position.set(0, 30, 0);
-scene.add(dirLight);
+sunLight.position.set(0, 30, 0);
+scene.add(sunLight);
 
 // Resize handling
 function resize() {
@@ -403,7 +404,10 @@ function loop() {
       cloudColor.copy(getColorFromSunY(cloudColors, y));
       sunColor.copy(getColorFromSunY(sunColors, y));
 
-      dirLight.color.copy(sunColor).multiplyScalar(0.0015);
+      sunLight.color
+        .copy(sunColor)
+        .multiplyScalar(0.0015)
+        .multiplyScalar(easeInOut(remapClamp(-0.03, 0.005, y)));
 
       sunColorForEnvMap.copy(sunColor).multiplyScalar(0.02);
 
@@ -441,14 +445,14 @@ function loop() {
     myLog("dirLight");
     const offset = sunVector.clone().multiplyScalar(100);
     const lightPos = new Vector3().copy(camera.position).add(offset);
-    dirLight.position.copy(lightPos);
-    dirLight.target.position.copy(camera.position);
-    dirLight.updateMatrixWorld();
-    dirLight.target.updateMatrixWorld();
-    dirLight.shadow.camera.updateMatrixWorld();
+    sunLight.position.copy(lightPos);
+    sunLight.target.position.copy(camera.position);
+    sunLight.updateMatrixWorld();
+    sunLight.target.updateMatrixWorld();
+    sunLight.shadow.camera.updateMatrixWorld();
 
     // Center shadow camera around the camera for consistent coverage
-    const cam = dirLight.shadow.camera;
+    const cam = sunLight.shadow.camera;
     const range = 100;
     cam.left = -range;
     cam.right = range;

@@ -52,3 +52,7 @@ export function unlerp(val: number, low: number, high: number) {
 export function inRange(val: number, low: number, high: number) {
   return low < val && val < high;
 }
+
+export function easeInOut(t: number) {
+  return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+}
