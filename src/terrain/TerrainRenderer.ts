@@ -237,10 +237,12 @@ export class TerrainRenderer {
     };
     // Based on edge traversal: top (left->right) and left (top->bottom) need reversed,
     // bottom (left->right) and right (top->bottom) use default
-    addSkirt(borderTop, true);
-    addSkirt(borderBottom, false);
-    addSkirt(borderLeft, false);
-    addSkirt(borderRight, true);
+    if (t.lod > 0) {
+      addSkirt(borderTop, true);
+      addSkirt(borderBottom, false);
+      addSkirt(borderLeft, false);
+      addSkirt(borderRight, true);
+    }
 
     // Update geometry with expanded buffers (positions/uvs already arrays; normals updated)
     geo.setAttribute("position", new BufferAttribute(new Float32Array(verts), 3));
