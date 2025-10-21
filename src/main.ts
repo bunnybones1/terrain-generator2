@@ -100,7 +100,7 @@ const sunColors: Color[] = [
 ];
 
 const cloudColors: Color[] = [
-  new Color(0.03, 0.1, 0.2), // night
+  new Color(0.005, 0.025, 0.05), // night
   new Color(0.6, 0.1, 0.1), // red
   new Color(0.6, 0.3, 0.15), // orange
   new Color(0.35, 0.3, 0.3),
@@ -144,7 +144,8 @@ const skyForEnvMap = new Sky(
   worldColorBottom,
   fogColor,
   cloudColor,
-  cloudScroll
+  cloudScroll,
+  false
 );
 bgScene.add(skyForEnvMap.visuals);
 const envMaker = new PMREMGenerator(renderer);
