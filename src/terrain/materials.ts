@@ -11,11 +11,11 @@ import { loadTex } from "./loadTex";
 import { ProbeManager } from "../lighting/ProbeManager";
 import { OVERDRAW_TEST, POWER_SHADOWS, POWER_SHADOWS_POWER } from "../overrides";
 import { ShaderChunk } from "three";
+import { waterAbsorbPack, waterColor, waterScatterPack } from "../sharedWaterShaderControls";
 
 export function makeTerrainMaterial(
   cameraPosition: Vector3,
   fogColor: Color,
-  waterColor: Color,
   envMap?: Texture,
   probeManager?: ProbeManager
 ) {
@@ -91,14 +91,12 @@ export function makeTerrainMaterial(
 
     // Water packed:
     // uWaterAbsorbPack: x=level, y=absorbR, z=absorbG, w=scatterR
-    const wapScale = 0.25;
     shader.uniforms.uWaterAbsorbPack = {
-      value: { x: 0.0, y: 0.22 * wapScale, z: 0.08 * wapScale, w: 0.02 * wapScale },
+      value: waterAbsorbPack,
     };
     // uWaterScatterPack: xyz=scatterRGB, w=unused (backscatter uses xyz)
-    const wspScale = 0.25;
     shader.uniforms.uWaterScatterPack = {
-      value: { x: 0.02 * wspScale, y: 0.03 * wspScale, z: 0.08 * wspScale, w: 0.0 },
+      value: waterScatterPack,
     };
     shader.uniforms.uWaterColor = {
       value: waterColor,

@@ -16,13 +16,12 @@ import {
   cloudColor,
   sunColor,
   sunColorForEnvMap,
-  waterColor,
-  waterColorDefault,
   worldColorBottom,
   worldColorBottomDefault,
   worldColorTop,
 } from "./gameColors";
 import { cloudScroll, sunAngle, sunVector } from "./sharedGameData";
+import { waterColor, waterColorDefault } from "./sharedWaterShaderControls";
 // import { findIslandSpawn } from "./findIslandSpawn";
 
 export function initGreaterOverworld(
@@ -104,7 +103,7 @@ export function initGreaterOverworld(
   // const oceanSize = 40000; // meters
   // const oceanGeom = new PlaneGeometry(oceanSize, oceanSize, 40, 40);
   // oceanGeom.rotateX(-Math.PI / 2); // make it horizontal
-  const oceanManager = new Water(camera, waterColor);
+  const oceanManager = new Water(camera);
   const ocean = oceanManager.visuals;
   // ocean.position.set(0, 0, 0);
   // ocean.castShadow = false;

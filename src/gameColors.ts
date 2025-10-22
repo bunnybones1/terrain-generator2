@@ -9,6 +9,3 @@ export const worldColorBottomDefault = new Color(0.4, 0.25, 0.1);
 export const worldColorBottom = worldColorBottomDefault.clone();
 export const cloudColor = worldColorTop.clone();
 export const fogColor = worldColorTop;
-const wcScale = 2;
-export const waterColorDefault = new Color(0.05 * wcScale, 0.2 * wcScale, 0.2 * wcScale);
-export const waterColor = waterColorDefault.clone();

@@ -15,16 +15,22 @@ import { Refractor } from "three/addons/objects/Refractor.js";
 import { generateUUID } from "three/src/math/MathUtils";
 import { uniformTime } from "./materials/globalUniforms/time";
 import { makeInsanePerspectiveDiscGeometry } from "./geometry/insanePerspectiveDiscGeometryMaker";
+import {
+  waterAbsorbPack,
+  waterAbsorbPackDefault,
+  waterColor,
+  waterScatterPack,
+  waterScatterPackDefault,
+} from "../sharedWaterShaderControls";
 
 export default class Water {
   private uniformDistortionScale: { value: Vector2 };
   visuals: Reflector;
   refractor: Refractor;
   private playerWaterSide = 0;
-  constructor(
-    private camera: PerspectiveCamera,
-    waterColor: Color
-  ) {
+  aboveWater: boolean;
+  constructor(private camera: PerspectiveCamera) {
+    this.aboveWater = this.camera.position.y >= 0;
     const uniformDistortionScale = { value: new Vector2(1, 1) };
     this.uniformDistortionScale = uniformDistortionScale;
     const waterGeometry = makeInsanePerspectiveDiscGeometry(200000);
@@ -48,14 +54,12 @@ export default class Water {
 
           // Water packed:
           // uWaterAbsorbPack: x=level, y=absorbR, z=absorbG, w=scatterR
-          const wapScale = 0.25;
           shader.uniforms.uWaterAbsorbPack = {
-            value: { x: 0.0, y: 0.22 * wapScale, z: 0.08 * wapScale, w: 0.02 * wapScale },
+            value: waterAbsorbPack,
           };
           // uWaterScatterPack: xyz=scatterRGB, w=unused (backscatter uses xyz)
-          const wspScale = 0.25;
           shader.uniforms.uWaterScatterPack = {
-            value: { x: 0.02 * wspScale, y: 0.03 * wspScale, z: 0.08 * wspScale, w: 0.0 },
+            value: waterScatterPack,
           };
           shader.uniforms.uWaterColor = {
             value: waterColor,
@@ -197,6 +201,10 @@ export default class Water {
             .replace(
               `#include <colorspace_fragment>`,
               `
+              // Apply a gamma curve prior to output encoding, to tweak contrast of water
+              // Note: colorspace_fragment will handle final encoding; this is an artistic gamma
+              // gl_FragColor.rgb = pow(gl_FragColor.rgb, vec3(1.5));
+
               #include <colorspace_fragment>
               gl_FragColor.rgb *= transmittance;
               gl_FragColor.rgb = gl_FragColor.rgb * (vec3(1.0)-inScattering) + inScattering;
@@ -219,6 +227,7 @@ export default class Water {
     this.refractor = refractor;
     refractor.visible = false;
     refractor.material.visible = false;
+    const waterColorBackup = new Color();
     p.then(() => {
       if (
         this.visuals.material instanceof ShaderMaterial &&
@@ -235,6 +244,14 @@ export default class Water {
           material: Material,
           group: Group
         ) => {
+          waterColorBackup.copy(waterColor);
+          waterAbsorbPack.copy(waterAbsorbPackDefault);
+          waterScatterPack.copy(waterScatterPackDefault);
+          if (this.aboveWater) {
+            waterAbsorbPack.multiplyScalar(0.7);
+            waterScatterPack.multiplyScalar(1.5);
+            waterColor.multiply(waterColor).multiplyScalar(0.9);
+          }
           this.visuals.visible = false;
           this.refractor.visible = false;
           oldBeforeRender(renderer, scene, camera, geometry, material, group);
@@ -245,6 +262,11 @@ export default class Water {
         this.visuals.material.uniforms.tDiffuse2 = this.refractor.material.uniforms.tDiffuse;
         // this.visuals.material.uniforms.uDistortionScale = { value: 1 };
       }
+      this.visuals.onAfterRender = () => {
+        waterAbsorbPack.copy(waterAbsorbPackDefault);
+        waterScatterPack.copy(waterScatterPackDefault);
+        waterColor.copy(waterColorBackup);
+      };
     });
   }
   update() {
@@ -258,6 +280,7 @@ export default class Water {
       this.uniformDistortionScale.value.x = newPlayerWaterSide === -1 ? 50 : 5;
       this.uniformDistortionScale.value.y = 1;
     }
+    this.aboveWater = this.camera.position.y >= 0;
     this.visuals.position.x = this.camera.position.x;
     this.visuals.position.z = this.camera.position.z;
     this.visuals.updateMatrixWorld();

@@ -35,7 +35,6 @@ import {
   cloudColor,
   fogColor,
   sunColorForEnvMap,
-  waterColor,
   worldColorBottom,
   worldColorTop,
 } from "./gameColors";
@@ -139,7 +138,6 @@ let envMap = envMaker.fromScene(bgScene, 0.0075);
 const terrainMat = makeTerrainMaterial(
   camera.position,
   fogColor,
-  waterColor,
   AMBIENT_LIGHT_MODE === "envmap" ? envMap.texture : undefined,
   AMBIENT_LIGHT_MODE === "probes" ? probeManager : undefined
 );
