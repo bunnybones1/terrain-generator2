@@ -20,7 +20,7 @@ import {
   worldColorBottomDefault,
   worldColorTop,
 } from "./gameColors";
-import { cloudScroll, sunAngle, sunVector } from "./sharedGameData";
+import { auroraScroll, auroraStrength, cloudScroll, sunAngle, sunVector } from "./sharedGameData";
 import { waterColor, waterColorDefault } from "./sharedWaterShaderControls";
 // import { findIslandSpawn } from "./findIslandSpawn";
 
@@ -181,6 +181,10 @@ export function initGreaterOverworld(
       cloudScroll.x = (camera.position.x * 40) / 100000 + sunAngle.value * 10.0;
       cloudScroll.y = (camera.position.z * 40) / -100000;
       cloudScroll.z = sunAngle.value * 10;
+      auroraScroll.x = (camera.position.x * 40) / 100000;
+      auroraScroll.y = (camera.position.z * 40) / -100000;
+      auroraScroll.z = sunAngle.value * 10;
+      auroraStrength.value = 1.0 - remapClamp(-0.3, -0.1, Math.sin(sunAngle.value));
 
       sunVector.set(Math.cos(sunAngle.value), Math.sin(sunAngle.value), 0);
 

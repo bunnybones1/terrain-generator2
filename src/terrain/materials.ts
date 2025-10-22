@@ -1,21 +1,13 @@
-import {
-  Vector2,
-  MeshStandardMaterial,
-  Color,
-  Vector3,
-  Vector4,
-  AdditiveBlending,
-  Texture,
-} from "three";
+import { Vector2, MeshStandardMaterial, Vector3, Vector4, AdditiveBlending, Texture } from "three";
 import { loadTex } from "./loadTex";
 import { ProbeManager } from "../lighting/ProbeManager";
 import { OVERDRAW_TEST, POWER_SHADOWS, POWER_SHADOWS_POWER } from "../overrides";
 import { ShaderChunk } from "three";
 import { waterAbsorbPack, waterColor, waterScatterPack } from "../sharedWaterShaderControls";
+import { fogColor } from "../gameColors";
 
 export function makeTerrainMaterial(
   cameraPosition: Vector3,
-  fogColor: Color,
   envMap?: Texture,
   probeManager?: ProbeManager
 ) {
@@ -579,7 +571,7 @@ export function makeTerrainMaterial(
 
         roughnessFactor = mix(roughnessFactor, 0.2, tSand);
         // specularIntensity = mix(specularIntensity, 0.3, tSand);
-        roughnessFactor = mix(roughnessFactor, 0.4, tSnow);
+        roughnessFactor = mix(roughnessFactor, 0.05, tSnow);
         roughnessFactor = mix(roughnessFactor, 1.0, pineAmt);
         if (vWorldPos.y < waterLevel + 0.06) {
           roughnessFactor = 1.0;

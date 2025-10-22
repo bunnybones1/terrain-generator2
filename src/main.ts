@@ -31,20 +31,10 @@ import { updateUIDigRadius } from "./helpers/ui/updateUIDigRadius";
 import Sky from "./worldObjects/Sky";
 import { makeCustomDepthMaterial } from "./terrain/customDepthMaterial";
 import { initGreaterOverworld } from "./greaterOverworld";
-import {
-  cloudColor,
-  fogColor,
-  sunColorForEnvMap,
-  worldColorBottom,
-  worldColorTop,
-} from "./gameColors";
-import { cloudScroll, sunAngle, sunVector } from "./sharedGameData";
-// import { findIslandSpawn } from "./findIslandSpawn";
+import { sunAngle } from "./sharedGameData";
 
-// 3D area container
 const view3d = document.createElement("div");
 document.body.appendChild(view3d);
-// js setup
 const renderer = new WebGLRenderer({ antialias: false, logarithmicDepthBuffer: true });
 
 for (const v of ["-moz-crisp-edges", "-webkit-crisp-edges", "crisp-edges", "pixelated"]) {
@@ -54,7 +44,7 @@ for (const v of ["-moz-crisp-edges", "-webkit-crisp-edges", "crisp-edges", "pixe
 renderer.autoClear = false;
 renderer.setSize(view3d.clientWidth || window.innerWidth, window.innerHeight);
 // renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setPixelRatio(1);
+// renderer.setPixelRatio(1);
 renderer.shadowMap.enabled = true;
 // renderer.shadowMap.type = BasicShadowMap;
 // renderer.shadowMap.type = PCFShadowMap;
@@ -121,15 +111,7 @@ debugPlane.updateMatrix();
 
 const bgScene = new Scene();
 
-const skyMaker = new Sky(
-  sunVector,
-  sunColorForEnvMap,
-  worldColorTop,
-  worldColorBottom,
-  fogColor,
-  cloudColor,
-  cloudScroll
-);
+const skyMaker = new Sky();
 const skyForEnvMap = skyMaker.createVisuals(false);
 bgScene.add(skyForEnvMap.root);
 const envMaker = new PMREMGenerator(renderer);
@@ -137,7 +119,6 @@ let envMap = envMaker.fromScene(bgScene, 0.0075);
 
 const terrainMat = makeTerrainMaterial(
   camera.position,
-  fogColor,
   AMBIENT_LIGHT_MODE === "envmap" ? envMap.texture : undefined,
   AMBIENT_LIGHT_MODE === "probes" ? probeManager : undefined
 );
@@ -228,6 +209,7 @@ function loop() {
   // Update camera matrices so attached HUD elements render correctly
   camera.updateMatrixWorld(true);
 
+  skyMaker.auroraKit.render(renderer, sunAngle.value * 0.15);
   overWorld.update(dt);
 
   // Animate sun vector around Z axis and update background env

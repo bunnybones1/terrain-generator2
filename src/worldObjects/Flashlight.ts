@@ -28,6 +28,7 @@ export default class Flashlight {
     flashlight.position.copy(camera.position);
     this.light = flashlight;
     this.lightTarget = flashlight.target;
+    this.light.visible = false;
   }
   update(dta: number) {
     const dt = Math.min(0.03, dta);

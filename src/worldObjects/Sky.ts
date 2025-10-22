@@ -20,6 +20,16 @@ import CloudPlaneMaterial from "./materials/CloudPlaneMaterial";
 import { makeInsanePerspectiveDiscGeometry } from "./geometry/insanePerspectiveDiscGeometryMaker";
 import { createNoise3D } from "simplex-noise";
 import { PRNG } from "../utils/PRNG";
+import {
+  cloudColor,
+  fogColor,
+  sunColorForEnvMap,
+  worldColorBottom,
+  worldColorTop,
+} from "../gameColors";
+import { auroraStrength, cloudScroll, sunVector } from "../sharedGameData";
+import AuroraPlaneMaterial from "./materials/AuroraPlaneMaterial";
+import AuroraKit from "./AuroraKit";
 
 const origin = new Vector3(0, 0, 0);
 
@@ -27,7 +37,8 @@ class VisualBundle {
   constructor(
     public root: Object3D,
     public sunBall: Mesh,
-    public stars: Object3D | null
+    public stars: Object3D | null,
+    public aurora: Object3D
   ) {
     //
   }
@@ -39,15 +50,9 @@ export default class Sky {
   stars: Object3D;
   bgSphere: Object3D;
   cloudPlane: Object3D;
-  constructor(
-    private sunVector: Vector3,
-    sunColorForEnvMap: Color,
-    worldColorTop: Color,
-    worldColorBottom: Color,
-    fogColor: Color,
-    cloudColor: Color,
-    cloudScroll: Vector3
-  ) {
+  auroraPlane: Object3D;
+  auroraKit: AuroraKit;
+  constructor() {
     const seed = 7;
     const rng = new PRNG(seed);
     const simplex = createNoise3D(rng.next);
@@ -78,6 +83,16 @@ export default class Sky {
     cloudPlane.position.y = 0.1;
     cloudPlane.rotation.x = Math.PI * 0.5;
     this.cloudPlane = cloudPlane;
+
+    const auroraKit = new AuroraKit(512, 512);
+    this.auroraKit = auroraKit;
+    const auroraMat = new AuroraPlaneMaterial(auroraKit.texture);
+    const auroraPlane = new Mesh(makeInsanePerspectiveDiscGeometry(4), auroraMat);
+    auroraPlane.scale.setScalar(2.5);
+    auroraPlane.renderOrder = -2;
+    auroraPlane.position.y = 0.2;
+    auroraPlane.rotation.x = Math.PI * 0.5;
+    this.auroraPlane = auroraPlane;
 
     // Stars: 10,000 points in a hemispherical distribution
     const STAR_COUNT = 10000;
@@ -137,26 +152,29 @@ export default class Sky {
   createVisuals(useStars: boolean) {
     const root = new Object3D();
     const sunBall = this.sunBall.clone();
+    const auroraPlane = this.auroraPlane.clone();
     root.add(sunBall);
     root.add(this.bgSphere.clone());
     root.add(this.cloudPlane.clone());
+    root.add(this.auroraPlane.clone());
     const stars = useStars ? this.stars.clone() : null;
     if (stars) {
       root.add(stars);
     }
     root.updateMatrixWorld(true);
-    const bundle = new VisualBundle(root, sunBall, stars);
+    const bundle = new VisualBundle(root, sunBall, stars, auroraPlane);
     this.visuals.push(bundle);
 
     return bundle;
   }
   update() {
     // Update master references
-    this.sunBall.position.copy(this.sunVector).normalize().multiplyScalar(9);
+    this.sunBall.position.copy(sunVector).normalize().multiplyScalar(9);
     this.sunBall.lookAt(origin);
     if (this.stars) {
       this.stars.rotation.y += 0.00005;
     }
+    this.auroraPlane.visible = auroraStrength.value > 0;
 
     // Update all visual bundles (cloned instances in the scene)
     for (const bundle of this.visuals) {
@@ -165,6 +183,7 @@ export default class Sky {
       if (bundle.stars) {
         bundle.stars.rotation.y = this.stars.rotation.y;
       }
+      bundle.aurora.visible = this.auroraPlane.visible;
     }
   }
 }
