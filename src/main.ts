@@ -52,8 +52,6 @@ renderer.shadowMap.type = PCFSoftShadowMap;
 // renderer.shadowMap.type = VSMShadowMap;
 view3d.appendChild(renderer.domElement);
 
-const ENVMAP_TIME_THRESHOLD = 0.00125;
-
 const scene = new Scene();
 
 scene.matrixAutoUpdate = false;
@@ -178,7 +176,6 @@ initKeyboardShortcuts(firstPersonController, flashlight);
 
 const fpsCounter = new FPSCounter();
 
-let lastSunAngleUpdate = 0;
 // Real-time tracker for 2 Hz envmap updates
 let lastEnvmapUpdateMs = performance.now();
 
