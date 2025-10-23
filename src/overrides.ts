@@ -4,7 +4,7 @@ export const POWER_SHADOWS_POWER = `10.5`;
 export const TIME_SPEED_DEFAULT = 0.005;
 export const SUN_SHADOW_SCALE = 1000;
 
-export const ENVMAP_FIXED_FPS = 2;
+export const ENVMAP_FIXED_FPS = 8;
 
 // Toggle this constant to enable/disable overdraw test mode.
 // Changing it will re-run onBeforeCompile and recompile the shader because of defines changes.

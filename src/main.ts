@@ -3,7 +3,6 @@ import {
   Scene,
   WebGLRenderer,
   Mesh,
-  PMREMGenerator,
   DoubleSide,
   MeshBasicMaterial,
   PlaneGeometry,
@@ -21,7 +20,7 @@ import FirstPersonController from "./FirstPersonController";
 import { uniformTime } from "./worldObjects/materials/globalUniforms/time";
 import { ProbeManager } from "./lighting/ProbeManager";
 import { makeTerrainMaterial } from "./terrain/materials";
-import { AMBIENT_LIGHT_MODE, OVERDRAW_TEST } from "./overrides";
+import { AMBIENT_LIGHT_MODE, ENVMAP_FIXED_FPS, OVERDRAW_TEST } from "./overrides";
 import { initLocationHelper } from "./helpers/locationHelper";
 import Flashlight from "./worldObjects/Flashlight";
 import FPSCounter from "./helpers/FPSCounter";
@@ -32,6 +31,7 @@ import Sky from "./worldObjects/Sky";
 import { makeCustomDepthMaterial } from "./terrain/customDepthMaterial";
 import { initGreaterOverworld } from "./greaterOverworld";
 import { timeBoost, timeSpeed, worldTime } from "./sharedGameData";
+import CustomPMREMGenerator from "./lighting/CustomPMREMGenerator";
 
 const view3d = document.createElement("div");
 document.body.appendChild(view3d);
@@ -112,8 +112,8 @@ const bgScene = new Scene();
 const skyMaker = new Sky();
 const skyForEnvMap = skyMaker.createVisuals(false);
 bgScene.add(skyForEnvMap.root);
-const envMaker = new PMREMGenerator(renderer);
-let envMap = envMaker.fromScene(bgScene, 0.0075);
+const envMaker = new CustomPMREMGenerator(renderer);
+const envMap = envMaker.fromScene(bgScene, 0.0075);
 
 const terrainMat = makeTerrainMaterial(
   camera.position,
@@ -176,7 +176,7 @@ initKeyboardShortcuts(firstPersonController, flashlight);
 
 const fpsCounter = new FPSCounter();
 
-// Real-time tracker for 2 Hz envmap updates
+// Real-time tracker for envmap updates
 let lastEnvmapUpdateMs = performance.now();
 
 // Render loop
@@ -223,19 +223,11 @@ function loop() {
     // Regenerate environment map from bgScene
     if (!OVERDRAW_TEST) {
       // Tick exactly 2 times per second (every 500ms) regardless of worldTime
-      if (now - lastEnvmapUpdateMs >= 500) {
+      if (now - lastEnvmapUpdateMs >= 1000 / ENVMAP_FIXED_FPS) {
         lastEnvmapUpdateMs = now;
 
-        if (envMap) envMap.texture.dispose();
-        envMap = envMaker.fromScene(bgScene, 0.0, undefined, undefined, { size: 1024 });
+        envMaker.fromScene(bgScene, 0.0, undefined, undefined, { size: 1024 });
         // scene.background = envMap.texture;
-
-        // If terrain material uses envmap mode, update its envMap reference
-        if (AMBIENT_LIGHT_MODE === "envmap") {
-          // terrainMat is used by waterSphere and terrain; ensure it sees the new env
-          terrainMat.envMap = envMap.texture;
-          // terrainMat.needsUpdate = true;
-        }
       }
     }
   }
