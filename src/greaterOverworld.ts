@@ -176,9 +176,9 @@ export function initGreaterOverworld(
   function update() {
     // Animate sun vector around Z axis and update background env
     {
-      cloudScroll.x = (camera.position.x * 40) / 100000 + worldTime.value * 10.0;
+      cloudScroll.x = (camera.position.x * 40) / 100000 + worldTime.value * 3;
       cloudScroll.y = (camera.position.z * 40) / -100000;
-      cloudScroll.z = worldTime.value * 10;
+      cloudScroll.z = worldTime.value * 3;
       auroraScroll.x = (camera.position.x * 40) / 100000;
       auroraScroll.y = (camera.position.z * 40) / -100000;
       auroraScroll.z = worldTime.value * 10;
