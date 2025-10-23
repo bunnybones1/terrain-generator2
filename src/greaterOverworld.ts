@@ -9,7 +9,7 @@ import {
   MeshStandardMaterial,
 } from "three";
 import Water from "./worldObjects/Water";
-import { OVERDRAW_TEST, SUN_SHADOW_SCALE, TIME_SPEED } from "./overrides";
+import { OVERDRAW_TEST, SUN_SHADOW_SCALE } from "./overrides";
 import Sky from "./worldObjects/Sky";
 import { easeInOut, remapClamp } from "./utils/math";
 import {
@@ -20,7 +20,7 @@ import {
   worldColorBottomDefault,
   worldColorTop,
 } from "./gameColors";
-import { auroraScroll, auroraStrength, cloudScroll, sunAngle, sunVector } from "./sharedGameData";
+import { auroraScroll, auroraStrength, cloudScroll, worldTime, sunVector } from "./sharedGameData";
 import { waterColor, waterColorDefault } from "./sharedWaterShaderControls";
 // import { findIslandSpawn } from "./findIslandSpawn";
 
@@ -173,20 +173,18 @@ export function initGreaterOverworld(
   waterSphere.position.set(0, 0, 0);
   scene.add(waterSphere);
 
-  function update(dt: number) {
+  function update() {
     // Animate sun vector around Z axis and update background env
     {
-      sunAngle.value += TIME_SPEED * dt;
-
-      cloudScroll.x = (camera.position.x * 40) / 100000 + sunAngle.value * 10.0;
+      cloudScroll.x = (camera.position.x * 40) / 100000 + worldTime.value * 10.0;
       cloudScroll.y = (camera.position.z * 40) / -100000;
-      cloudScroll.z = sunAngle.value * 10;
+      cloudScroll.z = worldTime.value * 10;
       auroraScroll.x = (camera.position.x * 40) / 100000;
       auroraScroll.y = (camera.position.z * 40) / -100000;
-      auroraScroll.z = sunAngle.value * 10;
-      auroraStrength.value = 1.0 - remapClamp(-0.3, -0.1, Math.sin(sunAngle.value));
+      auroraScroll.z = worldTime.value * 10;
+      auroraStrength.value = 1.0 - remapClamp(-0.3, -0.1, Math.sin(worldTime.value));
 
-      sunVector.set(Math.cos(sunAngle.value), Math.sin(sunAngle.value), 0);
+      sunVector.set(Math.cos(worldTime.value), Math.sin(worldTime.value), 0);
 
       skyMaker.update();
 

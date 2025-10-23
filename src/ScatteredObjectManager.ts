@@ -3,6 +3,7 @@ import { StonesManager } from "./worldObjects/StonesManager";
 import { TreeManager } from "./worldObjects/TreeManager";
 import { TerrainSampler } from "./terrain/TerrainSampler";
 import { DirtyAABB } from "./terrain/TerrainData";
+import { TimeStonesManager } from "./worldObjects/TimeStonesManager";
 
 export default class ScatteredObjectManager {
   updateAABBs(dirtyAABBs: DirtyAABB[] | undefined) {
@@ -12,9 +13,13 @@ export default class ScatteredObjectManager {
     for (const layer of this.treeLayers) {
       layer.update(this.camera, dirtyAABBs);
     }
+    for (const layer of this.timeStoneLayers) {
+      layer.update(this.camera, dirtyAABBs);
+    }
   }
   treeLayers: TreeManager[];
   stonesLayers: StonesManager[];
+  timeStoneLayers: TimeStonesManager[];
   constructor(
     scene: Scene,
     terrainSampler: TerrainSampler,
@@ -71,5 +76,24 @@ export default class ScatteredObjectManager {
       }),
     ];
     this.stonesLayers = stonesLayers;
+
+    const timeStoneLayers: TimeStonesManager[] = [
+      new TimeStonesManager(
+        "timeStones-XL",
+        scene,
+        terrainSampler,
+        terrainMat,
+        terrainDepthMat,
+        1001,
+        {
+          cellSize: 500,
+          density: 0.0000006, // ~0.06 per 1000 m^2
+          stoneRadius: 2,
+          lodCapacities: [1, 2, 4, 8, 16],
+          manageRadius: 5000,
+        }
+      ), // Layer 1: large, sparse
+    ];
+    this.timeStoneLayers = timeStoneLayers;
   }
 }

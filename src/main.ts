@@ -31,7 +31,7 @@ import { updateUIDigRadius } from "./helpers/ui/updateUIDigRadius";
 import Sky from "./worldObjects/Sky";
 import { makeCustomDepthMaterial } from "./terrain/customDepthMaterial";
 import { initGreaterOverworld } from "./greaterOverworld";
-import { sunAngle } from "./sharedGameData";
+import { timeBoost, timeSpeed, worldTime } from "./sharedGameData";
 
 const view3d = document.createElement("div");
 document.body.appendChild(view3d);
@@ -186,6 +186,13 @@ function loop() {
   const now = performance.now();
 
   const dt = Math.min(0.05, (now - lastTime) / 1000);
+
+  // Exponential decay that is framerate-independent: value *= exp(-lambda * dt)
+  const decayRate = 1.2;
+  timeBoost.value *= Math.exp(-decayRate * dt);
+
+  worldTime.value += (timeSpeed.value + timeBoost.value) * dt;
+
   uniformTime.value += dt;
   lastTime = now;
 
@@ -209,15 +216,15 @@ function loop() {
   // Update camera matrices so attached HUD elements render correctly
   camera.updateMatrixWorld(true);
 
-  skyMaker.auroraKit.render(renderer, sunAngle.value * 0.15);
-  overWorld.update(dt);
+  skyMaker.auroraKit.render(renderer, worldTime.value * 0.15);
+  overWorld.update();
 
   // Animate sun vector around Z axis and update background env
   {
     // Regenerate environment map from bgScene
     if (!OVERDRAW_TEST) {
-      if (sunAngle.value - lastSunAngleUpdate > ENVMAP_TIME_THRESHOLD) {
-        lastSunAngleUpdate = sunAngle.value;
+      if (worldTime.value - lastSunAngleUpdate > ENVMAP_TIME_THRESHOLD) {
+        lastSunAngleUpdate = worldTime.value;
 
         if (envMap) envMap.texture.dispose();
         envMap = envMaker.fromScene(bgScene, 0.0, undefined, undefined, { size: 1024 });

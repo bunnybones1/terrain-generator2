@@ -156,7 +156,7 @@ export default class Sky {
     root.add(sunBall);
     root.add(this.bgSphere.clone());
     root.add(this.cloudPlane.clone());
-    root.add(this.auroraPlane.clone());
+    root.add(auroraPlane);
     const stars = useStars ? this.stars.clone() : null;
     if (stars) {
       root.add(stars);

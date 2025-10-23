@@ -1,10 +1,11 @@
-import { BufferAttribute, IcosahedronGeometry } from "three";
+import { BufferAttribute, BufferGeometry } from "three";
 import { PRNG } from "../../utils/PRNG";
 import { createNoise3D } from "simplex-noise";
 import * as BufferGeometryUtils from "three/addons/utils/BufferGeometryUtils.js";
+import { makeIcoSphere } from "./makeIcoSphere";
 
 // Build 5 LOD stone geosphere geometries with ridge-noise distortion and UVs set to x,z
-export function buildStoneLODGeometries(baseRadius: number, rng: PRNG): IcosahedronGeometry[] {
+export function buildStoneLODGeometries(baseRadius: number, rng: PRNG): BufferGeometry[] {
   // Map a target "segments" to icosahedron detail level
   const targetSegments = Math.max(4, Math.ceil(2 * Math.PI * Math.max(baseRadius, 0.01) * 12));
   const detailForSegments = (segments: number) => {
@@ -17,14 +18,14 @@ export function buildStoneLODGeometries(baseRadius: number, rng: PRNG): Icosahed
   const baseDetail = detailForSegments(targetSegments);
 
   const levels = 5;
-  const geos: IcosahedronGeometry[] = [];
+  const geos: BufferGeometry[] = [];
   for (let i = 0; i < levels; i++) {
     const detail = Math.max(0, baseDetail - i); // reduce detail each LOD
-    geos.push(new IcosahedronGeometry(baseRadius, Math.pow(2, detail)));
+    geos.push(makeIcoSphere(baseRadius, detail));
   }
 
   const simplex = createNoise3D(rng.next);
-  const distortAndUv = (geom: IcosahedronGeometry) => {
+  const distortAndUv = (geom: BufferGeometry) => {
     const attribPos = geom.getAttribute("position");
     const octaves = 4;
     const baseFreq = 0.16;
