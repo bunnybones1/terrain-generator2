@@ -179,6 +179,8 @@ initKeyboardShortcuts(firstPersonController, flashlight);
 const fpsCounter = new FPSCounter();
 
 let lastSunAngleUpdate = 0;
+// Real-time tracker for 2 Hz envmap updates
+let lastEnvmapUpdateMs = performance.now();
 
 // Render loop
 function loop() {
@@ -223,8 +225,9 @@ function loop() {
   {
     // Regenerate environment map from bgScene
     if (!OVERDRAW_TEST) {
-      if (worldTime.value - lastSunAngleUpdate > ENVMAP_TIME_THRESHOLD) {
-        lastSunAngleUpdate = worldTime.value;
+      // Tick exactly 2 times per second (every 500ms) regardless of worldTime
+      if (now - lastEnvmapUpdateMs >= 500) {
+        lastEnvmapUpdateMs = now;
 
         if (envMap) envMap.texture.dispose();
         envMap = envMaker.fromScene(bgScene, 0.0, undefined, undefined, { size: 1024 });
