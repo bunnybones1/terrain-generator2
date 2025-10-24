@@ -288,6 +288,12 @@ export default class FirstPersonController {
     } else {
       // Walking speeds
       moveSpeed = this.keys["ShiftLeft"] || this.keys["ShiftRight"] ? 12 : 4; // m/s
+
+      // While walking, holding CTRL slows to 15% speed
+      if (this.keys["ControlLeft"] || this.keys["ControlRight"]) {
+        moveSpeed *= 0.15;
+      }
+
       moveSpeed *= speedBoost;
 
       // Build forward and right vectors on XZ plane

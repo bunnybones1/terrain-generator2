@@ -1,7 +1,7 @@
 precision lowp float;
 #include <common>
-varying vec3 vUvw;
 #include <logdepthbuf_pars_fragment>
+varying vec3 vUvw;
 uniform sampler2D uTexture;
 
 float mod289(float x){return x - floor(x * (1.0 / 289.0)) * 289.0;}

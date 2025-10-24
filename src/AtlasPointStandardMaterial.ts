@@ -1,0 +1,300 @@
+import { MeshStandardMaterial, ShaderChunk, Texture, Vector2 } from "three";
+import { POWER_SHADOWS, POWER_SHADOWS_POWER } from "./overrides";
+import { worldTime } from "./sharedGameData";
+
+// A ShaderMaterial that renders big square points, sampling from an atlas
+// made of (stepsYaw x stepsPitch) tiles. It picks a tile based on the
+// quantized yaw/pitch from camera to the point.
+export function createAtlasPointStandardMaterial(params: {
+  atlasNormals: Texture;
+  atlasDiffuse: Texture;
+  envMap: Texture;
+  stepsYaw: number;
+  stepsPitch: number;
+  pointSize?: number;
+}) {
+  const { atlasNormals, atlasDiffuse, envMap, stepsYaw, stepsPitch, pointSize = 64.0 } = params;
+  const pointSizeUniform = { value: pointSize };
+
+  const material = new MeshStandardMaterial({
+    transparent: false,
+    color: 0xffffff,
+    depthWrite: true,
+    alphaTest: 0.5,
+    roughness: 0.7,
+    metalness: 0.4,
+    map: atlasDiffuse,
+    normalMap: atlasNormals,
+    envMap: envMap,
+    envMapIntensity: 0.3,
+    userData: {
+      pointSizeUniform,
+    },
+  });
+
+  const varyings = `
+      varying vec3 vViewDir;
+
+      // Virtual target in screen space (NDC) we want to rotate towards
+      varying vec2 vVirtualNDC;
+      // Center of this point in NDC
+      varying vec2 vPointNDC;
+
+      // Pass-through for per-point yaw rotation
+      varying float vRotationY;
+
+      varying vec3 vCamVec;
+      varying float vDepth;
+      varying float vAngle;
+
+      varying vec2 vTileSize;
+      varying vec2 vTileMin;
+
+      varying float vPointSize;
+
+`;
+
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.pointSize = pointSizeUniform;
+    shader.uniforms.time = worldTime;
+    shader.uniforms.steps = { value: new Vector2(stepsYaw, stepsPitch) };
+    shader.uniforms.aspect = { value: 0.6 }; // viewport width/height,
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        `#include <common>`,
+        `${varyings}
+        #include <common>
+        `
+      )
+      // .replace(
+      //   `#include <uv_pars_vertex>`,
+      //   ShaderChunk.uv_pars_vertex.replace(`varying vec2 vUv;`, `varying vec2 vUv_internal;`)
+      // )
+      // .replace(
+      //   `#include <clipping_planes_pars_vertex>`,
+      //   `#include <clipping_planes_pars_vertex>
+      // `
+      // )
+      .replace(
+        `void main() {`,
+        `
+        uniform float pointSize;
+        uniform float time;
+        uniform float aspect;
+        uniform vec2 steps;
+
+        attribute float rotationY;
+
+        // Rotate vector v so that world up (0,1,0) aligns with n using Rodrigues' rotation formula
+        vec3 rotateViewByNormal(vec3 v, vec3 n) {
+          vec3 up = vec3(0.0, 1.0, 0.0);
+          vec3 nn = normalize(n);
+          float c = clamp(dot(up, nn), -1.0, 1.0);
+          if (c > 0.9999) return v;
+          if (c < -0.9999) {
+            // 180-degree rotation around any axis orthogonal to up, choose X axis
+            return vec3(v.x, -v.y, v.z);
+          }
+          vec3 axis = normalize(cross(up, nn));
+          float angle = acos(c);
+          float s = sin(angle);
+          float one_c = 1.0 - c;
+          return v * c + cross(axis, v) * s + axis * (dot(axis, v) * one_c);
+        }
+
+        // Return yaw (0..2PI) around Y, and pitch (0..PI/2) elevation from horizon to top
+        // Based on view direction from camera to point.
+        void computeAngles(in vec3 dir, out float yaw, out float pitch) {
+          vec3 d = normalize(dir);
+          yaw = atan(d.x, d.z);
+          if (yaw < 0.0) yaw += 6.283185307179586;
+          float elev = asin(clamp(d.y, -1.0, 1.0));
+          pitch = clamp(elev, 0.0, 1.5707963267948966);
+        }
+
+        void main() {
+        vec2 vUv = vec2(0.0);`
+      )
+      .replace(
+        `#include <worldpos_vertex>`,
+        `#include <worldpos_vertex>
+        
+        // camera position in world is available via cameraPosition
+        vec3 delta = cameraPosition - worldPosition.xyz;
+        vec3 baseViewDir = normalize(delta);
+        // Rotate view direction by per-point normal; do not pass normal further
+        float fastTime = time * 1000.0;
+        // float rna = atan(-normal.y, -normal.x);
+        float rna = atan(-normal.y, -normal.x) + (sin(fastTime + position.x * 2.0) * 0.25 + sin(fastTime + (position.x * 0.5)) * 0.5) * smoothstep(1.5, 3.0, length(delta));
+        vec3 normal2 = vec3(cos(rna), sin(rna), normal.z);
+        // normal2.xyz = vec3(-1.0) * normal2.xzy;
+        vViewDir = rotateViewByNormal(baseViewDir, normal2);
+
+        // Build a stable world-space basis from normal2 (surface up) and camera right for handedness
+        vec3 N = normalize(normal2); // surface up/normal in world space
+        vec3 upRef = abs(N.y) > 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
+        vec3 T = normalize(cross(upRef, N)); // right
+        vec3 B = cross(N, T); // forward aligned with surface
+
+        // Compute clip-space for point center
+        // vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        vec4 clipPos = projectionMatrix * mvPosition;
+        gl_Position = clipPos;
+
+        // Compute point center in NDC
+        vec3 ndc = clipPos.xyz / clipPos.w;
+        vPointNDC = ndc.xy;
+
+        // Compute virtual world point 1.5m below the camera on world Y axis
+        vec3 virtualWorld = cameraPosition + rotateViewByNormal(vec3(0.0, -1.5, 0.0), normal2);
+
+        // Project camera and virtual world point into clip space
+        vec4 camClip = projectionMatrix * viewMatrix * vec4(cameraPosition, 1.0);
+        vec4 virtClip = projectionMatrix * viewMatrix * vec4(virtualWorld, 1.0);
+        virtClip.w = abs(virtClip.w); // ensure below camera stays below in clip space
+
+        // Convert to NDC
+        vec2 camNDC = (camClip.xyz / camClip.w).xy;
+        vec2 virtNDC = (virtClip.xyz / virtClip.w).xy;
+
+        // Our virtual target is the projected virtual point
+        vVirtualNDC = virtNDC;
+
+        // Pass the per-point yaw rotation to fragment
+        vRotationY = rotationY;
+
+        // perspective size: gl_PointSize in pixels
+        float depth = -mvPosition.z; // positive forward
+        vDepth = depth;
+        float f = projectionMatrix[1][1]; // cot(fov/2)
+        gl_PointSize = pointSize * (f / max(depth, 0.0001));
+        vPointSize = gl_PointSize;
+        vCamVec = normalize(delta);
+
+        // Compute angle to virtual point in screen space.
+        vec2 fromCenterToTarget = vVirtualNDC - vPointNDC;
+        fromCenterToTarget.x *= aspect;
+        vAngle = -atan(fromCenterToTarget.x, -fromCenterToTarget.y);
+        
+        float yaw, pitch;
+        computeAngles(vViewDir, yaw, pitch);
+        yaw = mod(yaw + vRotationY, 6.283185307179586);
+        if (yaw < 0.0) yaw += 6.283185307179586;
+
+        float stepsYaw = max(1.0, steps.x);
+        float stepsPitch = max(1.0, steps.y);
+
+        float tYaw = yaw / 6.283185307179586;
+        float tPitch = (stepsPitch <= 1.0) ? 1.0 : (pitch / 1.5707963267948966);
+
+        float iYaw = floor(tYaw * stepsYaw);
+        float iPitch = floor(tPitch * (stepsPitch));
+        iYaw = clamp(iYaw, 0.0, stepsYaw - 1.0);
+        iPitch = clamp(iPitch, 0.0, stepsPitch - 1.0);
+
+        vTileSize = vec2(1.0/stepsYaw, 1.0/stepsPitch);
+        vTileMin = vec2(iYaw, iPitch) * vTileSize;
+
+      // #if defined( USE_UV )
+      //   vUv_internal = uv;
+      // #endif`
+      );
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        `#include <common>`,
+        `${varyings}
+      #include <common>`
+      )
+      // .replace(
+      //   `#include <uv_pars_fragment>`,
+      //   ShaderChunk.uv_pars_fragment.replace(`varying vec2 vUv;`, `varying vec2 vUv_internal;`)
+      // )
+      .replace(
+        `void main() {`,
+        `
+        // Rotate vector by yaw around Y, then pitch around X
+        vec3 rotateByYawPitch(vec3 v, float yaw, float pitch) {
+          float cy = cos(yaw), sy = sin(yaw);
+          vec3 vy = vec3(cy * v.x + sy * v.z, v.y, -sy * v.x + cy * v.z);
+          float cp = cos(pitch), sp = sin(pitch);
+          vec3 vyp = vec3(vy.x, cp * vy.y - sp * vy.z, sp * vy.y + cp * vy.z);
+          return normalize(vyp);
+        }
+
+        // Rotate a 2D vector by angle (radians)
+        vec2 rotate2D(vec2 p, float a) {
+          float s = sin(a), c = cos(a);
+          return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
+        }
+
+        // Rotate vector v so that world up (0,1,0) aligns with n using Rodrigues' rotation formula
+        vec3 rotateViewByNormal(vec3 v, vec3 n) {
+          vec3 up = vec3(0.0, 1.0, 0.0);
+          vec3 nn = normalize(n);
+          float c = clamp(dot(up, nn), -1.0, 1.0);
+          if (c > 0.9999) return v;
+          if (c < -0.9999) {
+            return vec3(v.x, -v.y, v.z);
+          }
+          vec3 axis = normalize(cross(up, nn));
+          float angle = acos(c);
+          float s = sin(angle);
+          float one_c = 1.0 - c;
+          return v * c + cross(axis, v) * s + axis * (dot(axis, v) * one_c);
+        }
+
+        void main() {
+        //dither and discard based on distance to avoid harsh LOD popping
+          float ditherScale = 0.1;
+          float dither = fract(sin(dot(gl_FragCoord.xy ,vec2(12.9898,78.233))) * 43758.5453);
+          // if(vDepth > (vPointSize * 0.5) && dither < clamp((vDepth - vPointSize * 0.5) * ditherScale, 0.0, 1.0)) discard;
+          float start = 40.0;
+          float end   = 60.0;
+          float ramp  = clamp((vDepth - start) / max(end - start, 1e-3), 0.0, 1.0);
+          if (vDepth > start && dither < ramp) discard;
+          if(length(gl_PointCoord - vec2(0.5)) > 0.5) discard; // circular points
+          vec2 uvPoint = vec2(gl_PointCoord.x, 1.0 - gl_PointCoord.y);
+
+          vec2 p = uvPoint - 0.5;
+          p = rotate2D(p, vAngle);
+          uvPoint = p + 0.5;
+
+          vec2 uv = vTileMin + uvPoint * vTileSize;
+
+        `
+      )
+      .replace(
+        `#include <map_fragment>`,
+        ShaderChunk.map_fragment.replace(`texture2D( map, vMapUv );`, `texture2D( map, uv);`)
+      )
+      .replace(
+        `#include <colorspace_fragment>`,
+        `#include <colorspace_fragment>
+        // gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+        // gl_FragColor = vec4(uv, uvPoint);
+
+        `
+      )
+      .replace(
+        `#include <shadowmap_pars_fragment>`,
+        ShaderChunk.shadowmap_pars_fragment.replace(
+          `shadowCoord.z += shadowBias;`,
+          POWER_SHADOWS
+            ? `
+                //uncollapse UV from customDepthMaterial.ts
+                vec2 tmp = shadowCoord.xy * 2.0 - 1.0;
+                shadowCoord.z += shadowBias + length(tmp) * -0.0025;
+                tmp = (vec2(1.0) - pow(vec2(1.0) - abs(tmp), vec2(${POWER_SHADOWS_POWER}))) * sign(tmp);
+                shadowCoord.xy = tmp * 0.5 + 0.5;
+                `
+            : `shadowCoord.z += shadowBias;`
+        )
+      );
+
+    shader.shaderName = "AtlasPointStandardMaterial";
+  };
+  material.name = "AtlasPointStandardMaterial";
+
+  return material;
+}

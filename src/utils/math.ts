@@ -29,6 +29,15 @@ export function hash2(i: number, j: number) {
   return result;
 }
 
+// simple hash for deterministic random value 0..1
+export function hash1(i: number) {
+  // integer hashing then map to [0,1)
+  let n = i * 668265263;
+  n = (n ^ (n >> 13)) * 1274126177;
+  n = (n ^ (n >> 16)) >>> 0;
+  return (n & 0xffffffff) / 2147483648;
+}
+
 export function ridge(n: number): number {
   return (1 - Math.abs(n)) * (1 - Math.abs(n));
 }

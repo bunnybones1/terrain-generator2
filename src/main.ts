@@ -32,6 +32,7 @@ import { makeCustomDepthMaterial } from "./terrain/customDepthMaterial";
 import { initGreaterOverworld } from "./greaterOverworld";
 import { timeBoost, timeSpeed, worldTime } from "./sharedGameData";
 import CustomPMREMGenerator from "./lighting/CustomPMREMGenerator";
+import GrassSystem from "./GrassSystem";
 
 const view3d = document.createElement("div");
 document.body.appendChild(view3d);
@@ -113,7 +114,7 @@ const skyMaker = new Sky();
 const skyForEnvMap = skyMaker.createVisuals(false);
 bgScene.add(skyForEnvMap.root);
 const envMaker = new CustomPMREMGenerator(renderer);
-const envMap = envMaker.fromScene(bgScene, 0.0075);
+const envMap = envMaker.fromScene(bgScene, 0.0, undefined, undefined, { size: 512 });
 
 const terrainMat = makeTerrainMaterial(
   camera.position,
@@ -122,8 +123,16 @@ const terrainMat = makeTerrainMaterial(
 );
 const overWorld = initGreaterOverworld(scene, camera, renderer, terrainMat, skyMaker);
 
+const grassSystem = new GrassSystem(renderer, terrainData, envMap.texture);
+
 const terrainDepthMat = makeCustomDepthMaterial();
-const terrainRenderer = new TerrainRenderer(terrainData, scene, terrainMat, terrainDepthMat);
+const terrainRenderer = new TerrainRenderer(
+  terrainData,
+  scene,
+  terrainMat,
+  terrainDepthMat,
+  grassSystem
+);
 
 // Indirect lighting probe manager
 const terrainSampler = new TerrainSampler(terrainData);
@@ -160,6 +169,7 @@ const scatMan = new ScatteredObjectManager(
   terrainDepthMat,
   camera
 );
+// scene.add(grassSystem.makePointCloudTile(camera.position));
 
 scene.updateMatrix();
 
@@ -226,7 +236,7 @@ function loop() {
       if (now - lastEnvmapUpdateMs >= 1000 / ENVMAP_FIXED_FPS) {
         lastEnvmapUpdateMs = now;
 
-        envMaker.fromScene(bgScene, 0.0, undefined, undefined, { size: 1024 });
+        envMaker.fromScene(bgScene, 0.0, undefined, undefined, { size: 512 });
         // scene.background = envMap.texture;
       }
     }

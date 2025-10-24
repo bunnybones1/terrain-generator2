@@ -20,5 +20,6 @@ export default class CloudPlaneMaterial extends ShaderMaterial {
         uScroll: { value: scroll },
       },
     });
+    this.name = "CloudPlaneMaterial";
   }
 }

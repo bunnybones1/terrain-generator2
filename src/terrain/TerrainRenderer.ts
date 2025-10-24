@@ -1,4 +1,5 @@
 import {
+  Box3,
   BufferAttribute,
   BufferGeometry,
   Camera,
@@ -6,8 +7,10 @@ import {
   MeshStandardMaterial,
   Scene,
   ShaderMaterial,
+  Vector3,
 } from "three";
 import { TerrainData, TileCoords } from "./TerrainData";
+import GrassSystem from "../GrassSystem";
 
 const maxTilesPerFrame = 40;
 type TileEntry = {
@@ -22,7 +25,8 @@ export class TerrainRenderer {
     private data: TerrainData,
     private scene: Scene,
     private material: MeshStandardMaterial,
-    private depthMaterial: ShaderMaterial
+    private depthMaterial: ShaderMaterial,
+    private grassSystem: GrassSystem
   ) {}
 
   updateAndRender(camera: Camera, visibleTiles: TileCoords[]): void {
@@ -91,6 +95,10 @@ export class TerrainRenderer {
     const half = size * 0.5;
     const cx = x + half;
     const cz = z + half;
+
+    let low = Infinity;
+    let high = -Infinity;
+
     for (let j = 0; j < res; j++) {
       for (let i = 0; i < res; i++) {
         const fx = i / (res - 1);
@@ -100,6 +108,9 @@ export class TerrainRenderer {
         const wz = z + fz * size;
         const terrainSample = this.data.getSample(wx, wz);
         const wy = useBaseForHighLod ? terrainSample.baseHeight : terrainSample.height;
+
+        low = Math.min(low, wy);
+        high = Math.max(high, wy);
         // Tile-local, centered XZ
         const lx = fx * size - half;
         const lz = fz * size - half;
@@ -260,6 +271,17 @@ export class TerrainRenderer {
     mesh.updateMatrixWorld();
     mesh.castShadow = true;
     mesh.receiveShadow = true;
+    geo.boundingBox = new Box3(
+      new Vector3(size * -0.5, low, size * -0.5),
+      new Vector3(size * 0.5, high, size * 0.5)
+    );
+    if (t.lod === 0) {
+      const grass = this.grassSystem.makePointCloudTileOnTerrainGeometry(mesh.position, geo);
+      if (grass) {
+        mesh.add(grass);
+      }
+      mesh.updateMatrixWorld(true);
+    }
     return mesh;
   }
 }

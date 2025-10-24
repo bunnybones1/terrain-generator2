@@ -1,9 +1,9 @@
 precision highp float;
 #include <common>
+#include <logdepthbuf_pars_vertex>
 
 varying vec3 vUvw;
 
-#include <logdepthbuf_pars_vertex>
 
 void main() {
   gl_Position = projectionMatrix * (modelViewMatrix * vec4(position, 1.0));
