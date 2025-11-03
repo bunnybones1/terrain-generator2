@@ -1,4 +1,4 @@
-import { Mesh, MeshNormalMaterial, Object3D, Texture, WebGLRenderer } from "three";
+import { Mesh, Object3D, Texture, WebGLRenderer } from "three";
 import { buildImposterAtlas } from "../imposterAtlasMaker";
 import { createWorldNormalMaterial } from "../WorldNormalMaterial";
 

@@ -467,8 +467,8 @@ export function createAtlasPointStandardMaterial(params: {
         `
       );
 
-    console.log(ShaderChunk.normal_fragment_begin);
-    console.log(ShaderChunk.normal_fragment_maps);
+    // console.log(ShaderChunk.normal_fragment_begin);
+    // console.log(ShaderChunk.normal_fragment_maps);
 
     shader.shaderName = "AtlasPointStandardMaterial";
   };

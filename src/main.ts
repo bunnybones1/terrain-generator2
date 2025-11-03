@@ -33,6 +33,7 @@ import { initGreaterOverworld } from "./greaterOverworld";
 import { timeBoost, timeSpeed, worldTime } from "./sharedGameData";
 import CustomPMREMGenerator from "./lighting/CustomPMREMGenerator";
 import GrassSystem from "./GrassSystem";
+import VoiceChat from "./voiceChat/VoiceChat";
 
 const view3d = document.createElement("div");
 document.body.appendChild(view3d);
@@ -185,9 +186,10 @@ scene.add(flashlight.lightTarget);
 initKeyboardShortcuts(firstPersonController, flashlight);
 
 const fpsCounter = new FPSCounter();
-
 // Real-time tracker for envmap updates
 let lastEnvmapUpdateMs = performance.now();
+
+const voiceChat = new VoiceChat(scene, camera);
 
 // Render loop
 function loop() {
@@ -247,6 +249,7 @@ function loop() {
   const dirtyAABBs = terrainData.popDirtyAABBs();
   scatMan.updateAABBs(dirtyAABBs);
 
+  voiceChat.update();
   renderer.clearColor();
   renderer.render(scene, camera);
   renderer.clearDepth();

@@ -1,7 +1,6 @@
 import {
   AmbientLight,
   Color,
-  DirectionalLight,
   NearestFilter,
   // NearestMipmapNearestFilter,
   Object3D,
