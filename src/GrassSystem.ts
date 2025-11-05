@@ -2,7 +2,6 @@ import {
   Vector3,
   WebGLRenderer,
   Texture,
-  Mesh,
   BufferGeometry,
   Float32BufferAttribute,
   Points,
@@ -10,22 +9,19 @@ import {
   PerspectiveCamera,
   Scene,
 } from "three";
-import { buildImposterAtlas } from "./imposterAtlasMaker";
 import { createAtlasPointStandardMaterial } from "./AtlasPointStandardMaterial";
 import { TerrainData } from "./terrain/TerrainData";
-import { createWorldNormalMaterial } from "./WorldNormalMaterial";
 import { getGrassTuft } from "./worldObjects/getGrassTuft";
 import { hash1 } from "./utils/math";
+import { getSeaGrassTuft } from "./worldObjects/getSeaGrassTuft";
+import PointCloudHelper, { pointCountMax, stepsYaw, stepsPitch } from "./helpers/PointCloudHelper";
 
-const pointCountMax = 4000;
 // const pointCount = 100056;
 // const pointSpreadRadius = 40.0; // meters
 // const pointSpreadRadius = 54.0; // meters
 
-const __positions = new Float32Array(pointCountMax * 3);
-const __uvs = new Float32Array(pointCountMax * 2);
-const __rotNormals = new Float32Array(pointCountMax * 3);
-const __rotationY = new Float32Array(pointCountMax);
+const GRASS_ALTITUDE_START = 1.5;
+const GRASS_ALTITUDE_END = 125;
 
 const __weights = new Vector3();
 
@@ -38,13 +34,12 @@ const __norma = new Vector3();
 const __normb = new Vector3();
 const __normc = new Vector3();
 const __normw = new Vector3();
+
 export default class GrassSystem {
   grassTuft: Object3D;
-  grassAtlasDiffuse: Texture;
-  grassAtlasNormals: Texture;
 
-  stepsYaw = 16;
-  stepsPitch = 8;
+  seagrassTuft: Object3D;
+  helpers = new Map<string, PointCloudHelper>();
   constructor(
     renderer: WebGLRenderer,
     private terrainData: TerrainData,
@@ -53,121 +48,14 @@ export default class GrassSystem {
     const tuftRadius = 0.25;
 
     this.grassTuft = getGrassTuft(tuftRadius);
-    const worldNormalMaterial = createWorldNormalMaterial();
+    this.seagrassTuft = getSeaGrassTuft(tuftRadius);
 
-    this.grassAtlasDiffuse = buildImposterAtlas(this.grassTuft, renderer, {
-      tileResolution: 256,
-      stepsYaw: this.stepsYaw,
-      stepsPitch: this.stepsPitch,
-      fov: 35,
-      radius: tuftRadius * 5,
-      clearColor: 0x000000,
-    });
-    this.grassTuft.traverse((obj) => {
-      if (obj instanceof Mesh) {
-        obj.material = worldNormalMaterial;
-      }
-    });
-    this.grassAtlasNormals = buildImposterAtlas(this.grassTuft, renderer, {
-      tileResolution: 256,
-      stepsYaw: this.stepsYaw,
-      stepsPitch: this.stepsPitch,
-      fov: 35,
-      radius: tuftRadius * 5,
-      clearColor: 0x000000,
-    });
-  }
-  makePointCloudTile(aroundPosition: Vector3, size: number) {
-    const pos = aroundPosition.clone();
-    pos.y = this.terrainData.getSample(pos.x, pos.z).baseHeight;
-
-    let pointCount = 0;
-
-    for (let i = 0; i < pointCountMax; i++) {
-      const x = (hash1(i) - 0.5) * size;
-      const z = (hash1(i + 13) - 0.5) * size;
-
-      // Sample terrain at world position and convert to local y relative to pos
-      const worldX = pos.x + x;
-      const worldZ = pos.z + z;
-      const slope = this.terrainData.getSlope(worldX, worldZ);
-      if (slope > 0.5) {
-        continue;
-      }
-      const sample = this.terrainData.getSample(worldX, worldZ);
-      const chance = hash1(i + 37);
-      if (sample.baseHeight < 10 + chance * 2 || sample.pine > 0.5 || sample.pineWindow > chance) {
-        continue;
-      }
-      const heightAt = sample.baseHeight;
-      const y = heightAt - pos.y + 0.05; // slight offset above ground
-
-      __positions[pointCount * 3 + 0] = x;
-      __positions[pointCount * 3 + 1] = y;
-      __positions[pointCount * 3 + 2] = z;
-
-      const n = this.terrainData.getNormal(worldX, worldZ);
-      // Store rotation normal for shader use
-      __rotNormals[pointCount * 3 + 0] = n[0];
-      __rotNormals[pointCount * 3 + 1] = -n[1];
-      __rotNormals[pointCount * 3 + 2] = n[2];
-
-      __uvs[pointCount * 2 + 0] = 0.5;
-      __uvs[pointCount * 2 + 1] = 0.75;
-
-      __rotationY[pointCount] = hash1(i + 61) * 6.283185307179586;
-      pointCount++;
-    }
-    if (pointCount === 0) {
-      return null;
-    }
-    const geom = new BufferGeometry();
-    geom.setAttribute(
-      "position",
-      new Float32BufferAttribute(__positions.slice(0, pointCount * 3), 3)
-    );
-    geom.setAttribute(
-      "normal",
-      new Float32BufferAttribute(__rotNormals.slice(0, pointCount * 3), 3)
-    );
-    geom.setAttribute("uv", new Float32BufferAttribute(__uvs.slice(0, pointCount * 2), 2));
-
-    geom.setAttribute("rotationY", new Float32BufferAttribute(__rotationY.slice(0, pointCount), 1));
-
-    const mat = createAtlasPointStandardMaterial({
-      atlasNormals: this.grassAtlasNormals,
-      atlasDiffuse: this.grassAtlasDiffuse,
-      stepsYaw: this.stepsYaw,
-      stepsPitch: this.stepsPitch,
-      pointSize: 596.0, // big square points
-      envMap: this.envMap,
-    });
-
-    const points = new Points(geom, mat);
-
-    points.onBeforeRender = (renderer: WebGLRenderer, scene: Scene, camera: PerspectiveCamera) => {
-      void scene;
-      const rt = renderer.getRenderTarget();
-      const pixelRatio = renderer.getPixelRatio ? renderer.getPixelRatio() : 1;
-      const heightPx = rt ? rt.height : renderer.domElement.height * pixelRatio;
-
-      // Vertical FOV in radians; for cube renders use 90°
-      const fovRad =
-        camera && camera.isPerspectiveCamera ? (camera.fov * Math.PI) / 180 : Math.PI / 2;
-
-      mat.userData.pointSizeUniform.value = 0.2 * (heightPx / fovRad);
-    };
-    points.position.copy(pos);
-    points.receiveShadow = true;
-    points.updateMatrixWorld();
-    points.frustumCulled = false; // since we use point size screenspace
-    return points;
+    this.helpers.set("grass", new PointCloudHelper(this.grassTuft, tuftRadius * 5, renderer));
+    this.helpers.set("seaGrass", new PointCloudHelper(this.seagrassTuft, tuftRadius * 5, renderer));
   }
   makePointCloudTileOnTerrainGeometry(aroundPosition: Vector3, geometry: BufferGeometry) {
     const pos = aroundPosition.clone();
     pos.y = this.terrainData.getSample(pos.x, pos.z).baseHeight;
-
-    let pointCount = 0;
 
     const indexArr = geometry.getIndex()!.array;
     let a = 0;
@@ -177,6 +65,12 @@ export default class GrassSystem {
     const invAOAndMaskAttr = geometry.getAttribute("invAOAndMask");
     const normalAttr = geometry.getAttribute("normal");
     const faces = ~~(indexArr.length / 3);
+
+    //iterate over helpers and set counter to 0
+    for (const helper of this.helpers.values()) {
+      helper.counter = 0;
+    }
+
     for (let i = 0; i < pointCountMax; i++) {
       const ri = ~~(faces * hash1(i + 19)) * 3;
       a = indexArr[ri];
@@ -213,67 +107,96 @@ export default class GrassSystem {
         continue;
       }
       const chance = hash1(i + 67);
-      if (y < 10 + chance * 2 || shady > chance * 0.5) {
-        continue;
-      }
 
-      __positions[pointCount * 3 + 0] = x;
-      __positions[pointCount * 3 + 1] = y + 0.05;
-      __positions[pointCount * 3 + 2] = z;
+      let helper = this.helpers.get("grass")!;
+
+      if (
+        y < GRASS_ALTITUDE_START + chance * 2 ||
+        y > GRASS_ALTITUDE_END + chance * 16 ||
+        shady > chance * 0.5
+      ) {
+        if (y < -3 + chance * 2) {
+          helper = this.helpers.get("seaGrass")!;
+        } else {
+          continue;
+        }
+      }
+      const pointCount = helper.counter;
+
+      helper.positions[pointCount * 3 + 0] = x;
+      helper.positions[pointCount * 3 + 1] = y + 0.05;
+      helper.positions[pointCount * 3 + 2] = z;
 
       // Store rotation normal for shader use
-      __rotNormals[pointCount * 3 + 0] = __normw.x;
-      __rotNormals[pointCount * 3 + 1] = -__normw.y;
-      __rotNormals[pointCount * 3 + 2] = __normw.z;
+      helper.rotNormals[pointCount * 3 + 0] = __normw.x;
+      helper.rotNormals[pointCount * 3 + 1] = -__normw.y;
+      helper.rotNormals[pointCount * 3 + 2] = __normw.z;
 
-      __uvs[pointCount * 2 + 0] = 0.5;
-      __uvs[pointCount * 2 + 1] = 0.75;
+      helper.uvs[pointCount * 2 + 0] = 0.5;
+      helper.uvs[pointCount * 2 + 1] = 0.75;
 
-      __rotationY[pointCount] = hash1(i + 61) * 6.283185307179586;
-      pointCount++;
+      helper.rotationY[pointCount] = hash1(i + 61) * 6.283185307179586;
+      helper.counter++;
     }
-    if (pointCount === 0) {
-      return null;
-    }
-    const geom = new BufferGeometry();
-    geom.setAttribute(
-      "position",
-      new Float32BufferAttribute(__positions.slice(0, pointCount * 3), 3)
-    );
-    geom.setAttribute(
-      "normal",
-      new Float32BufferAttribute(__rotNormals.slice(0, pointCount * 3), 3)
-    );
-    geom.setAttribute("uv", new Float32BufferAttribute(__uvs.slice(0, pointCount * 2), 2));
 
-    geom.setAttribute("rotationY", new Float32BufferAttribute(__rotationY.slice(0, pointCount), 1));
+    return Array.from(this.helpers.values())
+      .map((helper) => {
+        // console.log("Generated points for helper:", helper, "count:", helper.counter);
+        // }
+        if (helper.counter === 0) {
+          return null;
+        }
+        const geom = new BufferGeometry();
+        geom.setAttribute(
+          "position",
+          new Float32BufferAttribute(helper.positions.slice(0, helper.counter * 3), 3)
+        );
+        geom.setAttribute(
+          "normal",
+          new Float32BufferAttribute(helper.rotNormals.slice(0, helper.counter * 3), 3)
+        );
+        geom.setAttribute(
+          "uv",
+          new Float32BufferAttribute(helper.uvs.slice(0, helper.counter * 2), 2)
+        );
 
-    const mat = createAtlasPointStandardMaterial({
-      atlasNormals: this.grassAtlasNormals,
-      atlasDiffuse: this.grassAtlasDiffuse,
-      stepsYaw: this.stepsYaw,
-      stepsPitch: this.stepsPitch,
-      pointSize: 596.0, // big square points
-      envMap: this.envMap,
-    });
+        geom.setAttribute(
+          "rotationY",
+          new Float32BufferAttribute(helper.rotationY.slice(0, helper.counter), 1)
+        );
 
-    const points = new Points(geom, mat);
+        const mat = createAtlasPointStandardMaterial({
+          atlasNormals: helper.atlasNormals,
+          atlasDiffuse: helper.atlasDiffuse,
+          stepsYaw,
+          stepsPitch,
+          pointSize: 596.0, // big square points
+          envMap: this.envMap,
+        });
 
-    points.onBeforeRender = (renderer: WebGLRenderer, scene: Scene, camera: PerspectiveCamera) => {
-      void scene;
-      const rt = renderer.getRenderTarget();
-      const pixelRatio = renderer.getPixelRatio ? renderer.getPixelRatio() : 1;
-      const heightPx = rt ? rt.height : renderer.domElement.height * pixelRatio;
+        const points = new Points(geom, mat);
 
-      // Vertical FOV in radians; for cube renders use 90°
-      const fovRad =
-        camera && camera.isPerspectiveCamera ? (camera.fov * Math.PI) / 180 : Math.PI / 2;
+        points.onBeforeRender = (
+          renderer: WebGLRenderer,
+          scene: Scene,
+          camera: PerspectiveCamera
+        ) => {
+          void scene;
+          const rt = renderer.getRenderTarget();
+          const pixelRatio = renderer.getPixelRatio ? renderer.getPixelRatio() : 1;
+          const heightPx = rt ? rt.height : renderer.domElement.height * pixelRatio;
 
-      mat.userData.pointSizeUniform.value = 0.2 * (heightPx / fovRad);
-    };
-    // points.position.copy(pos);
-    points.receiveShadow = true;
-    points.frustumCulled = false; // since we use point size screenspace
-    return points;
+          // Vertical FOV in radians; for cube renders use 90°
+          const fovRad =
+            camera && camera.isPerspectiveCamera ? (camera.fov * Math.PI) / 180 : Math.PI / 2;
+
+          mat.userData.pointSizeUniform.value = 0.2 * (heightPx / fovRad);
+        };
+        // points.position.copy(pos);
+        points.receiveShadow = true;
+        points.frustumCulled = false; // since we use point size screenspace
+        return points;
+      })
+      .filter((p) => p !== null);
   }
 }

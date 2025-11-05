@@ -79,7 +79,7 @@ export function makeTerrainMaterial(
     shader.uniforms.uSnowPack = { value: new Vector4(108.5, 256.05, 0.01, 0.85) };
 
     // Sand controls packed: x=height, y=band
-    shader.uniforms.uSandPack = { value: new Vector2(10.0, 1.0) };
+    shader.uniforms.uSandPack = { value: new Vector2(2.0, 1.0) };
 
     // Water packed:
     // uWaterAbsorbPack: x=level, y=absorbR, z=absorbG, w=scatterR

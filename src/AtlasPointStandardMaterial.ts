@@ -1,6 +1,8 @@
 import { MeshStandardMaterial, ShaderChunk, Texture, Vector2 } from "three";
 import { POWER_SHADOWS, POWER_SHADOWS_POWER } from "./overrides";
 import { worldTime } from "./sharedGameData";
+import { waterAbsorbPack, waterColor, waterScatterPack } from "./sharedWaterShaderControls";
+import { fogColor } from "./gameColors";
 
 // A ShaderMaterial that renders big square points, sampling from an atlas
 // made of (stepsYaw x stepsPitch) tiles. It picks a tile based on the
@@ -34,6 +36,7 @@ export function createAtlasPointStandardMaterial(params: {
 
   const varyings = `
       varying vec3 vViewDir;
+      varying vec3 vWorldPos;
 
       // Virtual target in screen space (NDC) we want to rotate towards
       varying vec2 vVirtualNDC;
@@ -59,6 +62,25 @@ export function createAtlasPointStandardMaterial(params: {
     shader.uniforms.time = worldTime;
     shader.uniforms.steps = { value: new Vector2(stepsYaw, stepsPitch) };
     shader.uniforms.aspect = { value: 0.6 }; // viewport width/height,
+    shader.uniforms.uWaterAbsorbPack = { value: waterAbsorbPack };
+    shader.uniforms.uWaterScatterPack = { value: waterScatterPack };
+    shader.uniforms.uWaterColor = { value: waterColor };
+    shader.uniforms.uAirFogColor = { value: fogColor };
+    shader.uniforms.uAirFogDensity = { value: 0.0002 };
+
+    const lights_fragment_maps_custom = ShaderChunk.lights_fragment_maps
+      .split(`iblIrradiance += getIBLIrradiance( geometryNormal );`)
+      .join(`iblIrradiance += getIBLIrradiance( geometryNormal ) * transmittance;`)
+      .replace(
+        `radiance += getIBLRadiance( geometryViewDir, geometryNormal, material.roughness );`,
+        `radiance += getIBLRadiance( geometryViewDir, geometryNormal, material.roughness ) * transmittance;`
+      );
+
+    const lights_fragment_begin_custom = ShaderChunk.lights_fragment_begin.replace(
+      `getDirectionalLightInfo( directionalLight, directLight );`,
+      `getDirectionalLightInfo( directionalLight, directLight );
+          directLight.color *= transmittance;`
+    );
     shader.vertexShader = shader.vertexShader
       .replace(
         `#include <common>`,
@@ -66,15 +88,6 @@ export function createAtlasPointStandardMaterial(params: {
         #include <common>
         `
       )
-      // .replace(
-      //   `#include <uv_pars_vertex>`,
-      //   ShaderChunk.uv_pars_vertex.replace(`varying vec2 vUv;`, `varying vec2 vUv_internal;`)
-      // )
-      // .replace(
-      //   `#include <clipping_planes_pars_vertex>`,
-      //   `#include <clipping_planes_pars_vertex>
-      // `
-      // )
       .replace(
         `void main() {`,
         `
@@ -140,6 +153,7 @@ export function createAtlasPointStandardMaterial(params: {
         // vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
         vec4 clipPos = projectionMatrix * mvPosition;
         gl_Position = clipPos;
+        vWorldPos = worldPosition.xyz;
 
         // Compute point center in NDC
         vec3 ndc = clipPos.xyz / clipPos.w;
@@ -204,12 +218,34 @@ export function createAtlasPointStandardMaterial(params: {
       .replace(
         `#include <common>`,
         `${varyings}
-      #include <common>`
+        #include <common>
+        uniform vec4 uWaterAbsorbPack;
+        uniform vec4 uWaterScatterPack;
+        uniform vec3 uWaterColor;
+        uniform vec3 uAirFogColor;
+        uniform float uAirFogDensity;
+
+        vec3 atlasCamPos;
+        vec3 atlasToFrag;
+        float atlasRayLen;
+        float atlasWaterSeg;
+
+        vec3 waterBackscatter(vec3 sigma_s, vec3 tint, float L) {
+          float len = max(L, 0.0);
+          return tint * (vec3(1.0) - exp(-sigma_s * len));
+        }
+
+        float airFogFactor(float distance, float density) {
+          float d = max(distance, 0.0);
+          return clamp(1.0 - exp(-density * d), 0.0, 1.0);
+        }
+
+        vec3 downwellingAttenuation(float camDepth) {
+          float d = max(camDepth, 0.0);
+          vec3 k = vec3(uWaterAbsorbPack.y, uWaterAbsorbPack.z, max(uWaterAbsorbPack.z * 0.5, 0.01));
+          return exp(-k * d);
+        }`
       )
-      // .replace(
-      //   `#include <uv_pars_fragment>`,
-      //   ShaderChunk.uv_pars_fragment.replace(`varying vec2 vUv;`, `varying vec2 vUv_internal;`)
-      // )
       .replace(
         `void main() {`,
         `
@@ -269,14 +305,6 @@ export function createAtlasPointStandardMaterial(params: {
         ShaderChunk.map_fragment.replace(`texture2D( map, vMapUv );`, `texture2D( map, uv);`)
       )
       .replace(
-        `#include <colorspace_fragment>`,
-        `#include <colorspace_fragment>
-        // gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
-        // gl_FragColor = vec4(uv, uvPoint);
-
-        `
-      )
-      .replace(
         `#include <shadowmap_pars_fragment>`,
         ShaderChunk.shadowmap_pars_fragment.replace(
           `shadowCoord.z += shadowBias;`,
@@ -290,6 +318,104 @@ export function createAtlasPointStandardMaterial(params: {
                 `
             : `shadowCoord.z += shadowBias;`
         )
+      )
+      .replace(
+        `#include <lights_fragment_begin>`,
+        `
+        atlasCamPos = cameraPosition;
+        atlasToFrag = vWorldPos - atlasCamPos;
+        atlasRayLen = length(atlasToFrag);
+
+        float waterLevel = uWaterAbsorbPack.x;
+        vec3 rayDir = (atlasRayLen > 0.0) ? atlasToFrag / max(atlasRayLen, 1e-6) : vec3(0.0, -1.0, 0.0);
+
+        float camY = atlasCamPos.y;
+        float fragY = vWorldPos.y;
+
+        float waterSeg = 0.0;
+        float denom = rayDir.y;
+
+        if (abs(denom) < 1e-6) {
+          if (camY < waterLevel && fragY < waterLevel) {
+            waterSeg = atlasRayLen;
+          }
+        } else {
+          float tHit = (waterLevel - camY) / denom; // param where ray hits the plane
+          bool camUnder = camY < waterLevel;
+          bool fragUnder = fragY < waterLevel;
+
+          if (camUnder && fragUnder) {
+            waterSeg = atlasRayLen;
+          } else if (!camUnder && !fragUnder) {
+            waterSeg = 0.0;
+          } else {
+            float t = clamp(tHit, 0.0, atlasRayLen);
+            if (camUnder && !fragUnder) {
+              waterSeg = t;
+            } else if (!camUnder && fragUnder) {
+              waterSeg = max(atlasRayLen - t, 0.0);
+            } else {
+              waterSeg = 0.0;
+            }
+          }
+        }
+
+        atlasWaterSeg = waterSeg;
+
+        vec3 k = vec3(uWaterAbsorbPack.y, uWaterAbsorbPack.z, max(uWaterAbsorbPack.z * 0.5, 0.01));
+        vec3 transmittance = exp(-k * max(waterSeg, 0.0));
+
+        float fragDepthBelow = max(waterLevel - fragY, 0.0);
+        if (fragDepthBelow > 0.0) {
+          float depthFactor = 1.0 - exp(-uWaterAbsorbPack.z * fragDepthBelow);
+          vec3 attenDown = downwellingAttenuation(fragDepthBelow) * uWaterColor;
+          vec3 waterFilter = mix(vec3(1.0), attenDown, depthFactor);
+          transmittance *= waterFilter;
+        }
+        transmittance *= transmittance * transmittance * transmittance * transmittance;
+
+        ${lights_fragment_begin_custom}
+        `
+      )
+      .replace(`#include <lights_fragment_maps>`, lights_fragment_maps_custom)
+      .replace(
+        `#include <fog_fragment>`,
+        `
+        float camDepthBelow = max(waterLevel - atlasCamPos.y, 0.0);
+        vec3 attenColor = uWaterColor * downwellingAttenuation(camDepthBelow);
+        vec3 inScattering = waterBackscatter(uWaterScatterPack.xyz, attenColor, atlasWaterSeg * atlasWaterSeg);
+
+        vec3 dirF = (atlasRayLen > 0.0) ? atlasToFrag / atlasRayLen : vec3(0.0);
+
+        bool camAbove = atlasCamPos.y >= waterLevel;
+        bool fragAbove = vWorldPos.y >= waterLevel;
+
+        float airDist = 0.0;
+        if (camAbove && fragAbove) {
+          airDist = atlasRayLen;
+        } else if (camAbove && !fragAbove) {
+          float tSurfFog = (waterLevel - atlasCamPos.y) / min(dirF.y, -1e-6);
+          airDist = clamp(tSurfFog, 0.0, atlasRayLen);
+        } else if (!camAbove && fragAbove) {
+          float tSurfFog = (waterLevel - atlasCamPos.y) / max(dirF.y, 1e-6);
+          airDist = clamp(atlasRayLen - max(tSurfFog, 0.0), 0.0, atlasRayLen);
+        }
+
+        float fogFac = airFogFactor(airDist, uAirFogDensity);
+        vec3 fogCol = uAirFogColor;
+
+        if (camAbove && fragAbove) {
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, fogCol, fogFac);
+        } else if (camAbove && !fragAbove) {
+          gl_FragColor.rgb = gl_FragColor.rgb * (vec3(1.0) - inScattering) + inScattering;
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, fogCol, fogFac);
+        } else if (!camAbove && fragAbove) {
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, fogCol, fogFac);
+          gl_FragColor.rgb = gl_FragColor.rgb * (vec3(1.0) - inScattering) + inScattering;
+        } else {
+          gl_FragColor.rgb = gl_FragColor.rgb * (vec3(1.0) - inScattering) + inScattering;
+        }
+        `
       );
 
     shader.shaderName = "AtlasPointStandardMaterial";

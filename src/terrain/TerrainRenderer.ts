@@ -276,8 +276,8 @@ export class TerrainRenderer {
       new Vector3(size * 0.5, high, size * 0.5)
     );
     if (t.lod === 0) {
-      const grass = this.grassSystem.makePointCloudTileOnTerrainGeometry(mesh.position, geo);
-      if (grass) {
+      const grasses = this.grassSystem.makePointCloudTileOnTerrainGeometry(mesh.position, geo);
+      for (const grass of grasses) {
         mesh.add(grass);
       }
       mesh.updateMatrixWorld(true);

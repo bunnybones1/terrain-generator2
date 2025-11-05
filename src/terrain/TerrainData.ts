@@ -32,9 +32,9 @@ type DigLayer = {
 
 const pineCellSize = 4.0;
 const pineMaxHeight = 12.0; // meters
-const pineMinAltitude = 30;
+const pineMinAltitude = 15;
 const pineMaxAltitude = 60;
-const pineAltitudeTransition = 10;
+const pineAltitudeTransition = 4;
 const pineEdge0 = pineMinAltitude - pineAltitudeTransition;
 const pineEdge1 = pineMinAltitude;
 const pineEdge2 = pineMaxAltitude;
@@ -471,6 +471,15 @@ export class TerrainData {
       height -= hillsN * hillsAmplitude * ramp;
     }
 
+    //increase contrast around sea level for better islands
+    const seaLevel = 0;
+    const contrastRange = 3;
+    const tContrast = remapClamp(seaLevel - contrastRange, seaLevel + contrastRange, height);
+    const contrastFactor = tContrast * tContrast * (3 - 2 * tContrast); // smoothstep
+    const contrastStrength = 8; // tune
+    const newHeight = height + (height - seaLevel) * contrastStrength * (1 - contrastFactor);
+    height = height > 0 ? newHeight : Math.max(height, newHeight);
+
     // Subtract dig layers
     const dig = this.sampleDig(x, z);
     height -= dig;
@@ -558,6 +567,10 @@ export class TerrainData {
       pineWindow = fall;
     } else {
       pineWindow = 1;
+    }
+
+    if (baseHeight < 1) {
+      pineWindow = 0;
     }
 
     if (pineWindow > 0) {
