@@ -305,6 +305,27 @@ export function createAtlasPointStandardMaterial(params: {
         ShaderChunk.map_fragment.replace(`texture2D( map, vMapUv );`, `texture2D( map, uv);`)
       )
       .replace(
+        `#include <normal_fragment_maps>`,
+        ShaderChunk.normal_fragment_maps
+          .replace(
+            `normal = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;`,
+            `float cosRot = cos(vRotationY);
+            float sinRot = sin(vRotationY);
+            normal = texture2D( normalMap, uv ).xyz * -2.0 + 1.0;
+            normal = vec3(cosRot * normal.x + sinRot * normal.z, normal.y, -sinRot * normal.x + cosRot * normal.z);
+            `
+          )
+          .replace(
+            `vec3 mapN = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;`,
+            `
+            vec3 mapN = texture2D( normalMap, uv ).xyz * -2.0 + 1.0;
+            // float cosRot = cos(-vRotationY);
+            // float sinRot = sin(-vRotationY);
+            // mapN = vec3(cosRot * mapN.x + sinRot * mapN.z, mapN.y, -sinRot * mapN.x + cosRot * mapN.z);
+            `
+          )
+      )
+      .replace(
         `#include <shadowmap_pars_fragment>`,
         ShaderChunk.shadowmap_pars_fragment.replace(
           `shadowCoord.z += shadowBias;`,
@@ -415,6 +436,7 @@ export function createAtlasPointStandardMaterial(params: {
         } else {
           gl_FragColor.rgb = gl_FragColor.rgb * (vec3(1.0) - inScattering) + inScattering;
         }
+          // gl_FragColor.rgb = normal.rgb * 0.5 + 0.5;
         `
       );
 
