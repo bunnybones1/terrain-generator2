@@ -24,11 +24,11 @@ export function createAtlasPointStandardMaterial(params: {
     depthWrite: true,
     alphaTest: 0.5,
     roughness: 0.7,
-    metalness: 0.4,
+    metalness: 0.1,
     map: atlasDiffuse,
     normalMap: atlasNormals,
     envMap: envMap,
-    envMapIntensity: 0.3,
+    envMapIntensity: 0.15,
     userData: {
       pointSizeUniform,
     },
@@ -54,6 +54,8 @@ export function createAtlasPointStandardMaterial(params: {
       varying vec2 vTileMin;
 
       varying float vPointSize;
+
+      varying vec3 vBillboardUp;
 
 `;
 
@@ -138,13 +140,21 @@ export function createAtlasPointStandardMaterial(params: {
         // Rotate view direction by per-point normal; do not pass normal further
         float fastTime = time * 1000.0;
         // float rna = atan(-normal.y, -normal.x);
-        float rna = atan(-normal.y, -normal.x) + (sin(fastTime + position.x * 2.0) * 0.25 + sin(fastTime + (position.x * 0.5)) * 0.5) * smoothstep(1.5, 3.0, length(delta));
-        vec3 normal2 = vec3(cos(rna), sin(rna), normal.z);
-        // normal2.xyz = vec3(-1.0) * normal2.xzy;
-        vViewDir = rotateViewByNormal(baseViewDir, normal2);
+        float baseAngle = atan(-normal.y, -normal.x);
+        float swayOffset = (sin(fastTime + position.x * 2.0) * 0.25 + sin(fastTime + (position.x * 0.5)) * 0.5) * smoothstep(1.5, 3.0, length(delta));
+        float rna = baseAngle + swayOffset;
 
-        // Build a stable world-space basis from normal2 (surface up) and camera right for handedness
-        vec3 N = normalize(normal2); // surface up/normal in world space
+        vec3 baseNormal = normalize(vec3(cos(baseAngle), sin(baseAngle), normal.z));
+        vec3 baseNormal2 = normalize(vec3(cos(baseAngle-swayOffset), sin(baseAngle-swayOffset), normal.z));
+        vec3 swayNormal = normalize(vec3(cos(rna), sin(rna), normal.z));
+
+        vec3 viewDirSway = rotateViewByNormal(baseViewDir, swayNormal);
+
+        vViewDir = viewDirSway;
+        vBillboardUp = baseNormal2;
+
+        // Build a stable world-space basis from the swayed normal (surface up) and camera right for handedness
+        vec3 N = swayNormal; // surface up/normal in world space for billboard orientation
         vec3 upRef = abs(N.y) > 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
         vec3 T = normalize(cross(upRef, N)); // right
         vec3 B = cross(N, T); // forward aligned with surface
@@ -160,7 +170,7 @@ export function createAtlasPointStandardMaterial(params: {
         vPointNDC = ndc.xy;
 
         // Compute virtual world point 1.5m below the camera on world Y axis
-        vec3 virtualWorld = cameraPosition + rotateViewByNormal(vec3(0.0, -1.5, 0.0), normal2);
+        vec3 virtualWorld = cameraPosition + rotateViewByNormal(vec3(0.0, -1.5, 0.0), swayNormal);
 
         // Project camera and virtual world point into clip space
         vec4 camClip = projectionMatrix * viewMatrix * vec4(cameraPosition, 1.0);
@@ -175,6 +185,7 @@ export function createAtlasPointStandardMaterial(params: {
         vVirtualNDC = virtNDC;
 
         // Pass the per-point yaw rotation to fragment
+        // vRotationY = 0.0;
         vRotationY = rotationY;
 
         // perspective size: gl_PointSize in pixels
@@ -183,16 +194,17 @@ export function createAtlasPointStandardMaterial(params: {
         float f = projectionMatrix[1][1]; // cot(fov/2)
         gl_PointSize = pointSize * (f / max(depth, 0.0001));
         vPointSize = gl_PointSize;
-        vCamVec = normalize(delta);
+        vCamVec = baseViewDir;
 
         // Compute angle to virtual point in screen space.
         vec2 fromCenterToTarget = vVirtualNDC - vPointNDC;
         fromCenterToTarget.x *= aspect;
-        vAngle = -atan(fromCenterToTarget.x, -fromCenterToTarget.y);
+        vAngle = atan(fromCenterToTarget.x, -fromCenterToTarget.y);
         
         float yaw, pitch;
         computeAngles(vViewDir, yaw, pitch);
         yaw = mod(yaw + vRotationY, 6.283185307179586);
+        // yaw = mod(yaw, 6.283185307179586);
         if (yaw < 0.0) yaw += 6.283185307179586;
 
         float stepsYaw = max(1.0, steps.x);
@@ -306,24 +318,39 @@ export function createAtlasPointStandardMaterial(params: {
       )
       .replace(
         `#include <normal_fragment_maps>`,
-        ShaderChunk.normal_fragment_maps
-          .replace(
-            `normal = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;`,
-            `float cosRot = cos(vRotationY);
-            float sinRot = sin(vRotationY);
-            normal = texture2D( normalMap, uv ).xyz * -2.0 + 1.0;
-            normal = vec3(cosRot * normal.x + sinRot * normal.z, normal.y, -sinRot * normal.x + cosRot * normal.z);
-            `
-          )
-          .replace(
-            `vec3 mapN = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;`,
-            `
-            vec3 mapN = texture2D( normalMap, uv ).xyz * -2.0 + 1.0;
-            // float cosRot = cos(-vRotationY);
-            // float sinRot = sin(-vRotationY);
-            // mapN = vec3(cosRot * mapN.x + sinRot * mapN.z, mapN.y, -sinRot * mapN.x + cosRot * mapN.z);
-            `
-          )
+        `
+        #ifdef USE_NORMALMAP
+          vec3 atlasNormal = texture2D( normalMap, uv ).xyz * 2.0 - 1.0;
+          atlasNormal = normalize( atlasNormal );
+
+          // Apply per-point random spin around canonical up to avoid repetition.
+          float c = cos( vRotationY );
+          float s = sin( vRotationY );
+          atlasNormal = vec3(
+            c * atlasNormal.x - s * atlasNormal.z,
+            atlasNormal.y,
+            s * atlasNormal.x + c * atlasNormal.z
+          );
+
+          // Reorient normals from atlas(+Y up) into the tilted billboard basis.
+          vec3 worldNormal = rotateViewByNormal( atlasNormal, vBillboardUp );
+
+          
+          // Convert to view space for standard lighting evaluation.
+          vec3 viewNormal = normalize( ( viewMatrix * vec4( worldNormal, 0.0 ) ).xyz );
+          vec3 finalNormal = normalize(mix(viewNormal, -normal, 0.85));
+
+          #ifdef FLIP_SIDED
+            finalNormal = -finalNormal;
+          #endif
+          #ifdef DOUBLE_SIDED
+            finalNormal = finalNormal * faceDirection;
+          #endif
+
+          normal = finalNormal;
+          nonPerturbedNormal = finalNormal;
+        #endif
+        `
       )
       .replace(
         `#include <shadowmap_pars_fragment>`,
@@ -439,6 +466,9 @@ export function createAtlasPointStandardMaterial(params: {
           // gl_FragColor.rgb = normal.rgb * 0.5 + 0.5;
         `
       );
+
+    console.log(ShaderChunk.normal_fragment_begin);
+    console.log(ShaderChunk.normal_fragment_maps);
 
     shader.shaderName = "AtlasPointStandardMaterial";
   };

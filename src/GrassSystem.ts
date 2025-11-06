@@ -125,6 +125,7 @@ export default class GrassSystem {
 
       helper.positions[pointCount * 3 + 0] = x;
       helper.positions[pointCount * 3 + 1] = y + 0.05;
+      // helper.positions[pointCount * 3 + 1] = y + 0.05;
       helper.positions[pointCount * 3 + 2] = z;
 
       // Store rotation normal for shader use

@@ -53,10 +53,8 @@ export function buildImposterAtlas(
   scene.add(item);
 
   // Simple lighting: ambient + directional
-  const amb = new AmbientLight(0xffffff, 1.6);
-  const dir = new DirectionalLight(0xffffff, 2.8);
-  dir.position.set(2, 4, 2);
-  scene.add(amb, dir);
+  const amb = new AmbientLight(0xffffff, 1);
+  scene.add(amb);
 
   // Camera
   const cam = new PerspectiveCamera(fov, 1, 0.01, 10);

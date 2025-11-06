@@ -96,6 +96,7 @@ export function initGreaterOverworld(
   const skyForScene = skyMaker.createVisuals(true);
   skyForScene.root.scale.multiplyScalar(10000);
 
+  // const sunLight = new DirectionalLight(0xffeebb, 0);
   const sunLight = new DirectionalLight(0xffeebb, 1.5);
   sunLight.castShadow = true;
 

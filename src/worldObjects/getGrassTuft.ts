@@ -19,7 +19,7 @@ export function makeGrassTuft(tuftRadius: number) {
   const bladesPerTuft = 64;
   const bladeHeightRange = [0.15, 0.35];
   const bladeRadius = 0.02;
-  const color = new Color(0x4a5a0a);
+  const color = new Color(0x6a7a3a);
 
   // Single blade geometry: a cone pointing up (Y+)
   const segmentsRadial = 6;
@@ -86,7 +86,7 @@ export function makeGrassTuft(tuftRadius: number) {
     side: DoubleSide,
   });
   const flowerPetalMaterial = new MeshStandardMaterial({
-    color: new Color(0xffffff),
+    color: new Color(0xffffff).multiplyScalar(2),
     emissive: new Color(0xaa7777),
     roughness: 0.8,
     metalness: 0.0,
@@ -143,23 +143,37 @@ export function makeGrassTuft(tuftRadius: number) {
   //
 
   const grassTuft = new Object3D();
+  // grassTuft.add(
+  //   new Mesh(
+  //     new SphereGeometry(0.32, 32, 16),
+  //     new MeshStandardMaterial({
+  //       color: new Color(0xffffff),
+  //     })
+  //   )
+  // );
   grassTuft.add(iMesh);
+  const flowerHead = new Object3D();
+  flowerHead.rotation.x = Math.PI * 0.125;
+  flowerHead.position.set(0, 0.32, 0);
   const flowerCenter = new Mesh(new SphereGeometry(0.05, 16, 8), flowerCenterMaterial);
-  flowerCenter.rotation.x = Math.PI * 0.125;
-  flowerCenter.position.set(0, 0.35, 0);
-  flowerCenter.scale.set(1, 0.1, 1);
-  const flowerCenterBottom = new Mesh(new SphereGeometry(0.06, 16, 8), grassMaterial);
-  flowerCenterBottom.position.set(0, -0.05, 0);
-  flowerCenter.add(flowerCenterBottom);
-  const flowerPetal = new Mesh(new SphereGeometry(0.03, 8, 4), flowerPetalMaterial);
-  flowerPetal.scale.set(1, 0.2, 1);
+  flowerCenter.scale.set(1, 0.3, 1);
+  flowerHead.add(flowerCenter);
+  const flowerCenterBottom = new Mesh(
+    new SphereGeometry(0.06, 16, 8, 0, Math.PI * 2, Math.PI * 0.3, Math.PI),
+    grassMaterial
+  );
+  flowerCenterBottom.position.set(0, -0.025, 0);
+  flowerHead.add(flowerCenterBottom);
+  const flowerPetal = new Mesh(new SphereGeometry(0.03, 12, 6), flowerPetalMaterial);
+  flowerPetal.scale.set(1, 0.2, 1.2);
   for (let i = 0; i < 9; i++) {
     const angle = (i / 9) * Math.PI * 2;
     const petal = flowerPetal.clone();
-    petal.position.set(Math.cos(angle) * 0.06, 0.02, Math.sin(angle) * 0.06);
-    flowerCenter.add(petal);
+    flowerHead.add(petal);
+    petal.position.set(Math.cos(angle) * 0.07, 0.02, Math.sin(angle) * 0.07);
+    petal.rotation.set(0, -angle, 0.5);
   }
-  grassTuft.add(flowerCenter);
+  grassTuft.add(flowerHead);
 
   return grassTuft;
 }

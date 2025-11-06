@@ -1,5 +1,6 @@
 import { Mesh, MeshNormalMaterial, Object3D, Texture, WebGLRenderer } from "three";
 import { buildImposterAtlas } from "../imposterAtlasMaker";
+import { createWorldNormalMaterial } from "../WorldNormalMaterial";
 
 export const pointCountMax = 8000;
 
@@ -15,8 +16,8 @@ export default class PointCloudHelper {
   atlasDiffuse: Texture;
   atlasNormals: Texture;
   constructor(item: Object3D, radius: number, renderer: WebGLRenderer) {
-    const normalMaterial = new MeshNormalMaterial();
-    // const normalMaterial = createnormalMaterial();
+    // const normalMaterial = new MeshNormalMaterial();
+    const normalMaterial = createWorldNormalMaterial();
 
     this.atlasDiffuse = buildImposterAtlas(item, renderer, {
       tileResolution: 256,
