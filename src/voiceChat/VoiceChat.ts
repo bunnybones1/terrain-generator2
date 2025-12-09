@@ -24,7 +24,7 @@ const voiceBaseUrl =
   (import.meta as { env?: { VITE_VOICE_WORKER_URL?: string } }).env?.VITE_VOICE_WORKER_URL ||
   (typeof window !== "undefined" && window.location.port === "5173"
     ? window.location.origin.replace("5173", "8787")
-    : undefined);
+    : "https://flareslop.dysinski-tomasz.workers.dev");
 
 export default class VoiceChat {
   constructor(

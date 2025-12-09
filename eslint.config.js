@@ -17,7 +17,6 @@ export default [
       "node_modules/**",
       ".wrangler/**",
       "**/.wrangler/**",
-      "workers/voice-chat/node_modules/**",
       "pnpm-lock.yaml",
     ],
   },
