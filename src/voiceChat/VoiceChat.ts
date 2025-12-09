@@ -292,6 +292,21 @@ export default class VoiceChat {
       removePeerCapsule(peerId);
     };
 
+    const ensureAudioTransceiver = (pc: RTCPeerConnection) => {
+      const hasAudio = pc
+        .getTransceivers()
+        .some(
+          (t) =>
+            t.receiver.track?.kind === "audio" ||
+            t.sender.track?.kind === "audio" ||
+            t.mid == null // pending transceiver will get an m-line
+        );
+      if (!hasAudio) {
+        pc.addTransceiver("audio", { direction: "sendrecv" });
+        voiceDebug("added audio transceiver placeholder");
+      }
+    };
+
     const createPeerConnection = async (peerId: string): Promise<RTCPeerConnection | null> => {
       voiceDebug("createPeerConnection", peerId, "existing?", this.rtcPeers.has(peerId));
       if (this.rtcPeers.has(peerId)) {
@@ -301,6 +316,9 @@ export default class VoiceChat {
       const pc = new RTCPeerConnection({ iceServers: this.iceServers });
       voiceDebug("pc config", peerId, pc.getConfiguration());
       this.rtcPeers.set(peerId, pc);
+
+      // Keep a stable m-line order by ensuring an audio transceiver exists up front.
+      ensureAudioTransceiver(pc);
 
       pc.onicecandidate = (event) => {
         if (event.candidate) {
@@ -349,16 +367,17 @@ export default class VoiceChat {
           voiceDebug("skip negotiationneeded (not stable)", peerId, pc.signalingState);
           return;
         }
-        if (this.negotiationLocks.has(peerId)) {
-          return;
-        }
-        this.negotiationLocks.add(peerId);
-        try {
-          const offer = await pc.createOffer({ offerToReceiveAudio: true });
-          await pc.setLocalDescription(offer);
-          voiceDebug("setLocalDescription offer", peerId, pc.signalingState);
-          this.connection?.sendSignal(peerId, { type: "offer", sdp: offer.sdp });
-          voiceDebug("renegotiation offer sent to", peerId);
+          if (this.negotiationLocks.has(peerId)) {
+            return;
+          }
+          this.negotiationLocks.add(peerId);
+          try {
+            ensureAudioTransceiver(pc);
+            const offer = await pc.createOffer({ offerToReceiveAudio: true });
+            await pc.setLocalDescription(offer);
+            voiceDebug("setLocalDescription offer", peerId, pc.signalingState);
+            this.connection?.sendSignal(peerId, { type: "offer", sdp: offer.sdp });
+            voiceDebug("renegotiation offer sent to", peerId);
         } catch (error) {
           console.warn("Voice chat: renegotiation failed", error);
         } finally {
