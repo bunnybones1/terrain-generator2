@@ -304,13 +304,14 @@ export default class VoiceChat {
 
       pc.onicecandidate = (event) => {
         if (event.candidate) {
-          this.connection?.sendSignal(peerId, { type: "candidate", candidate: event.candidate });
+          const candidateInit = event.candidate.toJSON();
+          this.connection?.sendSignal(peerId, { type: "candidate", candidate: candidateInit });
           voiceDebug(
             "send candidate to",
             peerId,
-            event.candidate.candidate,
-            event.candidate.protocol,
-            event.candidate.address
+            candidateInit.candidate,
+            candidateInit.protocol,
+            candidateInit.address
           );
         } else {
           voiceDebug("icecandidate null (end)", peerId);
@@ -343,6 +344,11 @@ export default class VoiceChat {
 
       pc.onnegotiationneeded = async () => {
         voiceDebug("negotiationneeded", peerId, "locked?", this.negotiationLocks.has(peerId));
+        // Avoid creating offers while already in a negotiation (e.g., have-remote-offer)
+        if (pc.signalingState !== "stable") {
+          voiceDebug("skip negotiationneeded (not stable)", peerId, pc.signalingState);
+          return;
+        }
         if (this.negotiationLocks.has(peerId)) {
           return;
         }
@@ -548,8 +554,14 @@ export default class VoiceChat {
         }
 
         if ((payload as { candidate?: unknown }).candidate) {
+          const candidateInit = payload as RTCIceCandidateInit;
+          // Some browsers can emit candidates without sdpMid/sdpMLineIndex; skip those to avoid addIceCandidate errors.
+          if (!candidateInit.sdpMid && candidateInit.sdpMLineIndex == null) {
+            voiceDebug("skip candidate without mid/mline", from, candidateInit.candidate);
+            return;
+          }
           try {
-            await pc.addIceCandidate(payload as RTCIceCandidateInit);
+            await pc.addIceCandidate(candidateInit);
             voiceDebug("received candidate from", from);
           } catch (error) {
             console.warn("Voice chat: failed to add ICE candidate", error);
