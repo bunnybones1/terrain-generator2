@@ -50,8 +50,12 @@ export default class VoiceChat {
   selfId: string | null = null;
   voiceUi = document.createElement("div");
   totalPlayers: number | null = null;
-  peerNegotiationState = new Map<string, { makingOffer: boolean; ignoreOffer: boolean }>();
+  peerNegotiationState = new Map<
+    string,
+    { makingOffer: boolean; ignoreOffer: boolean; iceRestarted: boolean }
+  >();
   pendingIce = new Map<string, RTCIceCandidateInit[]>();
+  iceErrorCounts = new Map<string, number>();
 
   updatePannerPosition(peerId: string) {
     const nodes = this.peerAudioNodes.get(peerId);
@@ -293,6 +297,7 @@ export default class VoiceChat {
       removePeerCapsule(peerId);
       this.peerNegotiationState.delete(peerId);
       this.pendingIce.delete(peerId);
+      this.iceErrorCounts.delete(peerId);
     };
 
     const ensureAudioTransceiver = (pc: RTCPeerConnection) => {
@@ -309,7 +314,7 @@ export default class VoiceChat {
     const negotiationStateFor = (peerId: string) => {
       let state = this.peerNegotiationState.get(peerId);
       if (!state) {
-        state = { makingOffer: false, ignoreOffer: false };
+        state = { makingOffer: false, ignoreOffer: false, iceRestarted: false };
         this.peerNegotiationState.set(peerId, state);
       }
       return state;
@@ -317,24 +322,82 @@ export default class VoiceChat {
 
     const isPoliteFor = (selfId: string, peerId: string) => selfId > peerId;
 
+    const candidateHasMidOrIndex = (c: RTCIceCandidateInit) =>
+      !!c.sdpMid || typeof c.sdpMLineIndex === "number";
+
+    const normalizeCandidate = (pc: RTCPeerConnection, c: RTCIceCandidateInit) => {
+      // Drop hopeless candidates.
+      if (!candidateHasMidOrIndex(c)) {
+        // If there is exactly one media section, try to coerce to mid "0".
+        const sdp = pc.remoteDescription?.sdp ?? pc.localDescription?.sdp;
+        const mediaSections = sdp ? sdp.split("\r\nm=").length - 1 : 0;
+        if (mediaSections === 1) {
+          return { ...c, sdpMid: "0", sdpMLineIndex: 0 };
+        }
+        return null;
+      }
+
+      if (!c.sdpMid && typeof c.sdpMLineIndex === "number" && c.sdpMLineIndex === 0) {
+        return { ...c, sdpMid: "0" };
+      }
+
+      if (c.sdpMid && c.sdpMLineIndex == null) {
+        return { ...c, sdpMLineIndex: 0 };
+      }
+
+      return c;
+    };
+
     const queueIceCandidate = (peerId: string, candidate: RTCIceCandidateInit) => {
+      const pc = this.rtcPeers.get(peerId);
+      const normalized = pc
+        ? normalizeCandidate(pc, candidate)
+        : candidateHasMidOrIndex(candidate)
+          ? candidate
+          : null;
+      if (!normalized) {
+        voiceDebug("drop remote candidate without mid/mline", peerId, candidate.candidate);
+        return;
+      }
       const existing = this.pendingIce.get(peerId) ?? [];
-      existing.push(candidate);
+      if (existing.length > 200) {
+        voiceDebug("drop remote candidate (queue full)", peerId);
+        return;
+      }
+      existing.push(normalized);
       this.pendingIce.set(peerId, existing);
-      voiceDebug("queue remote candidate until ready", peerId, candidate.candidate);
+      voiceDebug("queue remote candidate until ready", peerId, normalized.candidate);
     };
 
     const flushPendingCandidates = async (peerId: string, pc: RTCPeerConnection) => {
       const queued = this.pendingIce.get(peerId);
       if (!queued || queued.length === 0) return;
       for (const candidate of queued) {
+        const normalized = normalizeCandidate(pc, candidate);
+        if (!normalized) {
+          voiceDebug("drop queued candidate without mid/mline", peerId);
+          continue;
+        }
         try {
-          await pc.addIceCandidate(candidate);
+          await pc.addIceCandidate(normalized);
         } catch (error) {
           console.warn("Voice chat: failed to add queued ICE candidate", error);
         }
       }
       this.pendingIce.delete(peerId);
+    };
+
+    const maybeForceRelay = (peerId: string, pc: RTCPeerConnection, reason?: string) => {
+      const current = pc.getConfiguration();
+      if (current.iceTransportPolicy === "relay") return;
+      const next = { ...current, iceTransportPolicy: "relay" as const };
+      try {
+        pc.setConfiguration(next);
+        pc.restartIce();
+        voiceDebug("forced relay-only ICE", peerId, reason ?? "");
+      } catch (error) {
+        console.warn("Voice chat: failed to force relay", error);
+      }
     };
 
     const createPeerConnection = async (peerId: string): Promise<RTCPeerConnection | null> => {
@@ -343,7 +406,11 @@ export default class VoiceChat {
         return this.rtcPeers.get(peerId)!;
       }
 
-      const pc = new RTCPeerConnection({ iceServers: this.iceServers });
+      const pc = new RTCPeerConnection({
+        iceServers: this.iceServers,
+        bundlePolicy: "max-bundle",
+        iceTransportPolicy: "all",
+      });
       voiceDebug("pc config", peerId, pc.getConfiguration());
       this.rtcPeers.set(peerId, pc);
 
@@ -367,6 +434,13 @@ export default class VoiceChat {
       };
       pc.onicecandidateerror = (event) => {
         voiceDebug("icecandidateerror", peerId, "code", event.errorCode, "text", event.errorText);
+        const count = (this.iceErrorCounts.get(peerId) ?? 0) + 1;
+        this.iceErrorCounts.set(peerId, count);
+        if (event.errorCode === 701 || (event.errorText && event.errorText.includes("lookup"))) {
+          if (count >= 3 && pc.connectionState !== "connected") {
+            maybeForceRelay(peerId, pc, "icecandidateerror");
+          }
+        }
       };
 
       pc.ontrack = (event) => {
@@ -418,6 +492,23 @@ export default class VoiceChat {
 
       pc.onconnectionstatechange = () => {
         voiceDebug("pc state", peerId, pc.connectionState);
+        if (pc.connectionState === "connected") {
+          const state = negotiationStateFor(peerId);
+          state.iceRestarted = false;
+        }
+        if (pc.connectionState === "failed") {
+          const state = negotiationStateFor(peerId);
+          if (!state.iceRestarted) {
+            state.iceRestarted = true;
+            maybeForceRelay(peerId, pc, "connection failed");
+            try {
+              pc.restartIce();
+            } catch (error) {
+              console.warn("Voice chat: restartIce failed", error);
+            }
+            return;
+          }
+        }
         if (pc.connectionState === "failed" || pc.connectionState === "closed") {
           cleanupPeer(peerId);
         }
@@ -639,12 +730,17 @@ export default class VoiceChat {
             voiceDebug("drop candidate due to ignored offer", from);
             return;
           }
+          const normalized = normalizeCandidate(pc, candidateInit);
+          if (!normalized) {
+            voiceDebug("drop candidate without mid/mline", from);
+            return;
+          }
           if (!pc.remoteDescription) {
-            queueIceCandidate(from, candidateInit);
+            queueIceCandidate(from, normalized);
             return;
           }
           try {
-            await pc.addIceCandidate(candidateInit);
+            await pc.addIceCandidate(normalized);
             voiceDebug("received candidate from", from);
           } catch (error) {
             console.warn("Voice chat: failed to add ICE candidate", error);
