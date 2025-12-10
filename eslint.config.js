@@ -12,13 +12,7 @@ import eslintConfigPrettier from "eslint-config-prettier";
 export default [
   {
     // Replaces .eslintignore
-    ignores: [
-      "dist/**",
-      "node_modules/**",
-      ".wrangler/**",
-      "**/.wrangler/**",
-      "pnpm-lock.yaml",
-    ],
+    ignores: ["dist/**", "node_modules/**", ".wrangler/**", "**/.wrangler/**", "pnpm-lock.yaml"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

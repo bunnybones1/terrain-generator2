@@ -48,9 +48,10 @@ export default class VoiceChat {
   connection: VoiceCellConnection | null = null;
   micReady = false;
   selfId: string | null = null;
-  negotiationLocks = new Set<string>();
   voiceUi = document.createElement("div");
   totalPlayers: number | null = null;
+  peerNegotiationState = new Map<string, { makingOffer: boolean; ignoreOffer: boolean }>();
+  pendingIce = new Map<string, RTCIceCandidateInit[]>();
 
   updatePannerPosition(peerId: string) {
     const nodes = this.peerAudioNodes.get(peerId);
@@ -290,21 +291,50 @@ export default class VoiceChat {
         this.peerDataChannels.delete(peerId);
       }
       removePeerCapsule(peerId);
+      this.peerNegotiationState.delete(peerId);
+      this.pendingIce.delete(peerId);
     };
 
     const ensureAudioTransceiver = (pc: RTCPeerConnection) => {
-      const hasAudio = pc
-        .getTransceivers()
-        .some(
-          (t) =>
-            t.receiver.track?.kind === "audio" ||
-            t.sender.track?.kind === "audio" ||
-            t.mid == null // pending transceiver will get an m-line
-        );
+      const hasAudio = pc.getTransceivers().some(
+        (t) =>
+          t.receiver.track?.kind === "audio" || t.sender.track?.kind === "audio" || t.mid == null // pending transceiver will get an m-line
+      );
       if (!hasAudio) {
         pc.addTransceiver("audio", { direction: "sendrecv" });
         voiceDebug("added audio transceiver placeholder");
       }
+    };
+
+    const negotiationStateFor = (peerId: string) => {
+      let state = this.peerNegotiationState.get(peerId);
+      if (!state) {
+        state = { makingOffer: false, ignoreOffer: false };
+        this.peerNegotiationState.set(peerId, state);
+      }
+      return state;
+    };
+
+    const isPoliteFor = (selfId: string, peerId: string) => selfId > peerId;
+
+    const queueIceCandidate = (peerId: string, candidate: RTCIceCandidateInit) => {
+      const existing = this.pendingIce.get(peerId) ?? [];
+      existing.push(candidate);
+      this.pendingIce.set(peerId, existing);
+      voiceDebug("queue remote candidate until ready", peerId, candidate.candidate);
+    };
+
+    const flushPendingCandidates = async (peerId: string, pc: RTCPeerConnection) => {
+      const queued = this.pendingIce.get(peerId);
+      if (!queued || queued.length === 0) return;
+      for (const candidate of queued) {
+        try {
+          await pc.addIceCandidate(candidate);
+        } catch (error) {
+          console.warn("Voice chat: failed to add queued ICE candidate", error);
+        }
+      }
+      this.pendingIce.delete(peerId);
     };
 
     const createPeerConnection = async (peerId: string): Promise<RTCPeerConnection | null> => {
@@ -361,27 +391,28 @@ export default class VoiceChat {
       };
 
       pc.onnegotiationneeded = async () => {
-        voiceDebug("negotiationneeded", peerId, "locked?", this.negotiationLocks.has(peerId));
-        // Avoid creating offers while already in a negotiation (e.g., have-remote-offer)
+        voiceDebug("negotiationneeded", peerId);
+        const state = negotiationStateFor(peerId);
+        if (!this.selfId) {
+          voiceDebug("skip negotiationneeded (missing selfId)", peerId);
+          return;
+        }
         if (pc.signalingState !== "stable") {
           voiceDebug("skip negotiationneeded (not stable)", peerId, pc.signalingState);
           return;
         }
-          if (this.negotiationLocks.has(peerId)) {
-            return;
-          }
-          this.negotiationLocks.add(peerId);
-          try {
-            ensureAudioTransceiver(pc);
-            const offer = await pc.createOffer({ offerToReceiveAudio: true });
-            await pc.setLocalDescription(offer);
-            voiceDebug("setLocalDescription offer", peerId, pc.signalingState);
-            this.connection?.sendSignal(peerId, { type: "offer", sdp: offer.sdp });
-            voiceDebug("renegotiation offer sent to", peerId);
+
+        state.makingOffer = true;
+        try {
+          ensureAudioTransceiver(pc);
+          await pc.setLocalDescription(await pc.createOffer({ offerToReceiveAudio: true }));
+          voiceDebug("setLocalDescription offer", peerId, pc.signalingState);
+          this.connection?.sendSignal(peerId, { type: "offer", sdp: pc.localDescription?.sdp });
+          voiceDebug("renegotiation offer sent to", peerId);
         } catch (error) {
           console.warn("Voice chat: renegotiation failed", error);
         } finally {
-          this.negotiationLocks.delete(peerId);
+          state.makingOffer = false;
         }
       };
 
@@ -554,29 +585,62 @@ export default class VoiceChat {
         }
 
         if ((payload as { type?: string }).type === "offer") {
-          await pc.setRemoteDescription(
-            new RTCSessionDescription(payload as RTCSessionDescriptionInit)
-          );
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          this.connection?.sendSignal(from, { type: "answer", sdp: answer.sdp });
-          voiceDebug("received offer from", from);
+          const state = negotiationStateFor(from);
+          const polite = this.selfId ? isPoliteFor(this.selfId, from) : false;
+          const offerCollision = state.makingOffer || pc.signalingState !== "stable";
+          state.ignoreOffer = !polite && offerCollision;
+
+          if (state.ignoreOffer) {
+            voiceDebug("ignore offer due to glare (impolite)", from);
+            return;
+          }
+          state.ignoreOffer = false;
+
+          try {
+            const offer = new RTCSessionDescription(payload as RTCSessionDescriptionInit);
+            if (offerCollision) {
+              await pc.setLocalDescription({ type: "rollback" });
+            }
+            await pc.setRemoteDescription(offer);
+            await flushPendingCandidates(from, pc);
+
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            this.connection?.sendSignal(from, { type: "answer", sdp: answer.sdp });
+            voiceDebug("processed remote offer", from, "collision", offerCollision);
+          } catch (error) {
+            console.warn("Voice chat: failed to handle remote offer", error);
+          }
           return;
         }
 
         if ((payload as { type?: string }).type === "answer") {
-          await pc.setRemoteDescription(
-            new RTCSessionDescription({ type: "answer", sdp: (payload as { sdp?: string }).sdp })
-          );
-          voiceDebug("received answer from", from);
+          const state = negotiationStateFor(from);
+          try {
+            await pc.setRemoteDescription(
+              new RTCSessionDescription({
+                type: "answer",
+                sdp: (payload as { sdp?: string }).sdp,
+              })
+            );
+            state.ignoreOffer = false;
+            await flushPendingCandidates(from, pc);
+            voiceDebug("received answer from", from);
+          } catch (error) {
+            console.warn("Voice chat: failed to apply answer", error);
+          }
           return;
         }
 
         if ((payload as { candidate?: unknown }).candidate) {
           const candidateInit = payload as RTCIceCandidateInit;
-          // Some browsers can emit candidates without sdpMid/sdpMLineIndex; skip those to avoid addIceCandidate errors.
-          if (!candidateInit.sdpMid && candidateInit.sdpMLineIndex == null) {
-            voiceDebug("skip candidate without mid/mline", from, candidateInit.candidate);
+          const state = negotiationStateFor(from);
+          if (state.ignoreOffer) {
+            voiceDebug("drop candidate due to ignored offer", from);
+            return;
+          }
+          if (!pc.remoteDescription) {
+            queueIceCandidate(from, candidateInit);
             return;
           }
           try {
@@ -609,19 +673,23 @@ export default class VoiceChat {
         }
         const pc = await createPeerConnection(peerId);
         if (!pc) return;
-        if (!isInitiatorFor(playerId, peerId)) {
+        // Initial offer is still started by the deterministic initiator to reduce glare.
+        if (isInitiatorFor(playerId, peerId)) {
+          const state = negotiationStateFor(peerId);
+          state.makingOffer = true;
+          try {
+            ensureAudioTransceiver(pc);
+            await pc.setLocalDescription(await pc.createOffer({ offerToReceiveAudio: true }));
+            voiceDebug("setLocalDescription offer (init)", peerId, pc.signalingState);
+            this.connection?.sendSignal(peerId, { type: "offer", sdp: pc.localDescription?.sdp });
+            voiceDebug("sent offer to", peerId);
+          } catch (error) {
+            console.warn("Voice chat: failed to create initial offer", error);
+          } finally {
+            state.makingOffer = false;
+          }
+        } else {
           voiceDebug("not initiator for peer", peerId);
-          return;
-        }
-
-        try {
-          const offer = await pc.createOffer({ offerToReceiveAudio: true });
-          await pc.setLocalDescription(offer);
-          voiceDebug("setLocalDescription offer (init)", peerId, pc.signalingState);
-          this.connection?.sendSignal(peerId, { type: "offer", sdp: offer.sdp });
-          voiceDebug("sent offer to", peerId);
-        } catch (error) {
-          console.warn("Voice chat: failed to create offer", error);
         }
       });
 
