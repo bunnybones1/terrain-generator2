@@ -340,7 +340,11 @@ export default class VoiceChat {
     const candidateStringLooksValid = (c: RTCIceCandidateInit) =>
       typeof c.candidate === "string" && c.candidate.trim().startsWith("candidate:");
 
-    const normalizeCandidate = (pc: RTCPeerConnection, c: RTCIceCandidateInit) => {
+    const normalizeCandidate = (
+      pc: RTCPeerConnection,
+      c: RTCIceCandidateInit,
+      peerId?: string
+    ) => {
       // Drop hopeless candidates.
       if (!candidateHasMidOrIndex(c)) {
         // If there is exactly one media section, try to coerce to mid "0".
@@ -349,6 +353,7 @@ export default class VoiceChat {
         if (mediaSections === 1) {
           return { ...c, sdpMid: "0", sdpMLineIndex: 0 };
         }
+        voiceDebug("drop candidate (no mid/mline)", peerId ?? "unknown");
         return null;
       }
 
@@ -361,10 +366,12 @@ export default class VoiceChat {
       }
 
       if (!candidateStringLooksValid(c)) {
+        voiceDebug("drop candidate (invalid format)", peerId ?? "unknown", c.candidate);
         return null;
       }
 
       if (c.candidate?.includes("raddr 0.0.0.0") || c.candidate?.includes("rport 0")) {
+        voiceDebug("drop candidate (zero raddr/rport)", peerId ?? "unknown", c.candidate);
         return null;
       }
 
@@ -374,7 +381,7 @@ export default class VoiceChat {
     const queueIceCandidate = (peerId: string, candidate: RTCIceCandidateInit) => {
       const pc = this.rtcPeers.get(peerId);
       const normalized = pc
-        ? normalizeCandidate(pc, candidate)
+        ? normalizeCandidate(pc, candidate, peerId)
         : candidateHasMidOrIndex(candidate) && candidateStringLooksValid(candidate)
           ? candidate
           : null;
@@ -396,7 +403,7 @@ export default class VoiceChat {
       const queued = this.pendingIce.get(peerId);
       if (!queued || queued.length === 0) return;
       for (const candidate of queued) {
-        const normalized = normalizeCandidate(pc, candidate);
+        const normalized = normalizeCandidate(pc, candidate, peerId);
         if (!normalized) {
           voiceDebug("drop queued candidate without mid/mline", peerId);
           continue;
@@ -435,6 +442,7 @@ export default class VoiceChat {
         iceTransportPolicy: "all",
       });
       voiceDebug("pc config", peerId, pc.getConfiguration());
+      voiceDebug("ice servers", peerId, (this.iceServers || []).map((s) => s.urls));
       this.rtcPeers.set(peerId, pc);
 
       // Keep a stable m-line order by ensuring an audio transceiver exists up front.
@@ -522,6 +530,7 @@ export default class VoiceChat {
         } catch (error) {
           console.warn("Voice chat: renegotiation failed", error);
           state.renegotiateSuspended = true;
+          voiceDebug("suspend renegotiation after failure", peerId);
         } finally {
           state.makingOffer = false;
           state.pendingOffer = false;
@@ -744,6 +753,7 @@ export default class VoiceChat {
           } catch (error) {
             console.warn("Voice chat: failed to handle remote offer", error);
             state.renegotiateSuspended = true;
+            voiceDebug("suspend renegotiation after remote-offer failure", from);
           }
           return;
         }
@@ -814,11 +824,11 @@ export default class VoiceChat {
         if (!pc) return;
         // Initial offer is still started by the deterministic initiator to reduce glare.
         if (isInitiatorFor(playerId, peerId)) {
-          const state = negotiationStateFor(peerId);
-          state.makingOffer = true;
-          state.pendingOffer = true;
-          try {
-            ensureAudioTransceiver(pc);
+        const state = negotiationStateFor(peerId);
+        state.makingOffer = true;
+        state.pendingOffer = true;
+        try {
+          ensureAudioTransceiver(pc);
             await pc.setLocalDescription(await pc.createOffer({ offerToReceiveAudio: true }));
             voiceDebug("setLocalDescription offer (init)", peerId, pc.signalingState);
             this.connection?.sendSignal(peerId, { type: "offer", sdp: pc.localDescription?.sdp });
@@ -826,6 +836,7 @@ export default class VoiceChat {
           } catch (error) {
             console.warn("Voice chat: failed to create initial offer", error);
             state.renegotiateSuspended = true;
+            voiceDebug("suspend renegotiation after initial-offer failure", peerId);
           } finally {
             state.makingOffer = false;
             state.pendingOffer = false;
