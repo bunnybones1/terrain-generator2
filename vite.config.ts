@@ -6,6 +6,21 @@ export default defineConfig({
   build: {
     sourcemap: true,
   },
+  resolve: {
+    alias: {
+      stream: "stream-browserify",
+      util: "util",
+      events: "events",
+      buffer: "buffer",
+      process: "process/browser",
+    },
+  },
+  define: {
+    global: "globalThis",
+  },
+  optimizeDeps: {
+    include: ["stream-browserify", "events", "util", "buffer", "process"],
+  },
   server: {
     port: 5173,
     open: true,
