@@ -34,6 +34,11 @@ import { timeBoost, timeSpeed, worldTime } from "./sharedGameData";
 import CustomPMREMGenerator from "./lighting/CustomPMREMGenerator";
 import GrassSystem from "./GrassSystem";
 import VoiceChat from "./voiceChat/VoiceChat";
+import process from "process";
+import { Buffer } from "buffer";
+
+(globalThis as unknown as { process?: unknown }).process = process;
+(globalThis as unknown as { Buffer?: unknown }).Buffer = Buffer;
 
 const view3d = document.createElement("div");
 document.body.appendChild(view3d);
