@@ -1,4 +1,5 @@
 import { Mesh, MeshBasicMaterial, CapsuleGeometry, Color, Scene, PerspectiveCamera } from "three";
+import Peer from "simple-peer";
 import {
   connectCellWS,
   joinWorld,
@@ -33,12 +34,11 @@ export default class VoiceChat {
   ) {
     this.init();
   }
-  rtcPeers = new Map<string, RTCPeerConnection>();
+  peers = new Map<string, Peer.Instance>();
   peerAudioNodes = new Map<
     string,
     { source: MediaStreamAudioSourceNode; panner: PannerNode; gain: GainNode }
   >();
-  peerDataChannels = new Map<string, RTCDataChannel>();
   peerCapsules = new Map<string, Mesh>();
   peerPositions = new Map<string, Vector3>();
   peerCapsuleGeometry = new CapsuleGeometry(0.25, 1, 4, 6);
@@ -50,18 +50,6 @@ export default class VoiceChat {
   selfId: string | null = null;
   voiceUi = document.createElement("div");
   totalPlayers: number | null = null;
-  peerNegotiationState = new Map<
-    string,
-    {
-      makingOffer: boolean;
-      ignoreOffer: boolean;
-      iceRestarted: boolean;
-      pendingOffer: boolean;
-      renegotiateSuspended: boolean;
-    }
-  >();
-  pendingIce = new Map<string, RTCIceCandidateInit[]>();
-  iceErrorCounts = new Map<string, number>();
 
   updatePannerPosition(peerId: string) {
     const nodes = this.peerAudioNodes.get(peerId);
@@ -208,44 +196,15 @@ export default class VoiceChat {
       }
     };
 
-    const setupPositionDataChannel = (peerId: string, channel: RTCDataChannel) => {
-      this.peerDataChannels.set(peerId, channel);
-      channel.onmessage = (event) => {
-        if (typeof event.data !== "string") {
-          return;
-        }
-        try {
-          const parsed = JSON.parse(event.data) as unknown;
-          handleIncomingPeerPosition(peerId, parsed);
-        } catch {
-          // Ignore malformed payloads
-        }
-      };
-      channel.onopen = () => {
-        voiceDebug("datachannel open", peerId, channel.label);
-      };
-      channel.onerror = (event) => {
-        voiceDebug("datachannel error", peerId, event);
-      };
-      channel.onclose = () => {
-        this.peerDataChannels.delete(peerId);
-        voiceDebug("datachannel closed", peerId, channel.label);
-      };
-    };
-
     const broadcastPositionToPeers = (position: Vector3) => {
       const payload = JSON.stringify({ type: "position", position });
-      for (const [peerId, channel] of this.peerDataChannels.entries()) {
-        if (channel.readyState !== "open") {
-          if (channel.readyState === "closed" || channel.readyState === "closing") {
-            this.peerDataChannels.delete(peerId);
+      for (const [peerId, peer] of this.peers.entries()) {
+        if ((peer as unknown as { connected?: boolean }).connected) {
+          try {
+            peer.send(payload);
+          } catch (error) {
+            voiceDebug("data send failed", peerId, error);
           }
-          continue;
-        }
-        try {
-          channel.send(payload);
-        } catch (error) {
-          voiceDebug("datachannel send failed", peerId, error);
         }
       }
     };
@@ -275,14 +234,16 @@ export default class VoiceChat {
     };
 
     const cleanupPeer = (peerId: string) => {
-      const pc = this.rtcPeers.get(peerId);
-      if (pc) {
-        pc.onicecandidate = null;
-        pc.ontrack = null;
-        pc.onconnectionstatechange = null;
-        pc.close();
+      const peer = this.peers.get(peerId);
+      if (peer) {
+        try {
+          peer.removeAllListeners();
+          peer.destroy();
+        } catch {
+          // ignore
+        }
       }
-      this.rtcPeers.delete(peerId);
+      this.peers.delete(peerId);
 
       const nodes = this.peerAudioNodes.get(peerId);
       if (nodes) {
@@ -291,294 +252,74 @@ export default class VoiceChat {
         nodes.panner.disconnect();
         this.peerAudioNodes.delete(peerId);
       }
-      const channel = this.peerDataChannels.get(peerId);
-      if (channel) {
-        try {
-          channel.close();
-        } catch {
-          // ignore
-        }
-        this.peerDataChannels.delete(peerId);
-      }
       removePeerCapsule(peerId);
-      this.peerNegotiationState.delete(peerId);
-      this.pendingIce.delete(peerId);
-      this.iceErrorCounts.delete(peerId);
     };
 
-    const ensureAudioTransceiver = (pc: RTCPeerConnection) => {
-      const hasAudio = pc.getTransceivers().some(
-        (t) =>
-          t.receiver.track?.kind === "audio" || t.sender.track?.kind === "audio" || t.mid == null // pending transceiver will get an m-line
-      );
-      if (!hasAudio) {
-        pc.addTransceiver("audio", { direction: "sendrecv" });
-        voiceDebug("added audio transceiver placeholder");
-      }
-    };
-
-    const negotiationStateFor = (peerId: string) => {
-      let state = this.peerNegotiationState.get(peerId);
-      if (!state) {
-        state = {
-          makingOffer: false,
-          ignoreOffer: false,
-          iceRestarted: false,
-          pendingOffer: false,
-          renegotiateSuspended: false,
-        };
-        this.peerNegotiationState.set(peerId, state);
-      }
-      return state;
-    };
-
-    const isPoliteFor = (selfId: string, peerId: string) => selfId > peerId;
-
-    const candidateHasMidOrIndex = (c: RTCIceCandidateInit) =>
-      !!c.sdpMid || typeof c.sdpMLineIndex === "number";
-
-    const candidateStringLooksValid = (c: RTCIceCandidateInit) =>
-      typeof c.candidate === "string" && c.candidate.trim().startsWith("candidate:");
-
-    const normalizeCandidate = (pc: RTCPeerConnection, c: RTCIceCandidateInit, peerId?: string) => {
-      // Drop hopeless candidates.
-      if (!candidateHasMidOrIndex(c)) {
-        // If there is exactly one media section, try to coerce to mid "0".
-        const sdp = pc.remoteDescription?.sdp ?? pc.localDescription?.sdp;
-        const mediaSections = sdp ? sdp.split("\r\nm=").length - 1 : 0;
-        if (mediaSections === 1) {
-          return { ...c, sdpMid: "0", sdpMLineIndex: 0 };
-        }
-        voiceDebug("drop candidate (no mid/mline)", peerId ?? "unknown");
-        return null;
-      }
-
-      if (!c.sdpMid && typeof c.sdpMLineIndex === "number" && c.sdpMLineIndex === 0) {
-        return { ...c, sdpMid: "0" };
-      }
-
-      if (c.sdpMid && c.sdpMLineIndex == null) {
-        return { ...c, sdpMLineIndex: 0 };
-      }
-
-      if (!candidateStringLooksValid(c)) {
-        voiceDebug("drop candidate (invalid format)", peerId ?? "unknown", c.candidate);
-        return null;
-      }
-
-      if (c.candidate?.includes("raddr 0.0.0.0") || c.candidate?.includes("rport 0")) {
-        voiceDebug("drop candidate (zero raddr/rport)", peerId ?? "unknown", c.candidate);
-        return null;
-      }
-
-      return c;
-    };
-
-    const queueIceCandidate = (peerId: string, candidate: RTCIceCandidateInit) => {
-      const pc = this.rtcPeers.get(peerId);
-      const normalized = pc
-        ? normalizeCandidate(pc, candidate, peerId)
-        : candidateHasMidOrIndex(candidate) && candidateStringLooksValid(candidate)
-          ? candidate
-          : null;
-      if (!normalized) {
-        voiceDebug("drop remote candidate without mid/mline", peerId, candidate.candidate);
-        return;
-      }
-      const existing = this.pendingIce.get(peerId) ?? [];
-      if (existing.length > 200) {
-        voiceDebug("drop remote candidate (queue full)", peerId);
-        return;
-      }
-      existing.push(normalized);
-      this.pendingIce.set(peerId, existing);
-      voiceDebug("queue remote candidate until ready", peerId, normalized.candidate);
-    };
-
-    const flushPendingCandidates = async (peerId: string, pc: RTCPeerConnection) => {
-      const queued = this.pendingIce.get(peerId);
-      if (!queued || queued.length === 0) return;
-      for (const candidate of queued) {
-        const normalized = normalizeCandidate(pc, candidate, peerId);
-        if (!normalized) {
-          voiceDebug("drop queued candidate without mid/mline", peerId);
-          continue;
-        }
-        try {
-          await pc.addIceCandidate(normalized);
-        } catch (error) {
-          console.warn("Voice chat: failed to add queued ICE candidate", error);
-        }
-      }
-      this.pendingIce.delete(peerId);
-    };
-
-    const maybeForceRelay = (peerId: string, pc: RTCPeerConnection, reason?: string) => {
-      const current = pc.getConfiguration();
-      if (current.iceTransportPolicy === "relay") return;
-      const next = { ...current, iceTransportPolicy: "relay" as const };
-      try {
-        pc.setConfiguration(next);
-        pc.restartIce();
-        voiceDebug("forced relay-only ICE", peerId, reason ?? "");
-      } catch (error) {
-        console.warn("Voice chat: failed to force relay", error);
-      }
-    };
-
-    const createPeerConnection = async (peerId: string): Promise<RTCPeerConnection | null> => {
-      voiceDebug("createPeerConnection", peerId, "existing?", this.rtcPeers.has(peerId));
-      if (this.rtcPeers.has(peerId)) {
-        return this.rtcPeers.get(peerId)!;
-      }
-
-      const pc = new RTCPeerConnection({
-        iceServers: this.iceServers,
-        bundlePolicy: "max-bundle",
-        iceTransportPolicy: "all",
-      });
-      voiceDebug("pc config", peerId, pc.getConfiguration());
-      voiceDebug(
-        "ice servers",
-        peerId,
-        (this.iceServers || []).map((s) => s.urls)
-      );
-      this.rtcPeers.set(peerId, pc);
-
-      // Keep a stable m-line order by ensuring an audio transceiver exists up front.
-      ensureAudioTransceiver(pc);
-
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          const candidateInit = event.candidate.toJSON();
-          this.connection?.sendSignal(peerId, { type: "candidate", candidate: candidateInit });
-          voiceDebug(
-            "send candidate to",
-            peerId,
-            candidateInit.candidate,
-            candidateInit.protocol,
-            candidateInit.address
-          );
-        } else {
-          voiceDebug("icecandidate null (end)", peerId);
-        }
-      };
-      pc.onicecandidateerror = (event) => {
-        voiceDebug("icecandidateerror", peerId, "code", event.errorCode, "text", event.errorText);
-        const count = (this.iceErrorCounts.get(peerId) ?? 0) + 1;
-        this.iceErrorCounts.set(peerId, count);
-        if (event.errorCode === 701 || (event.errorText && event.errorText.includes("lookup"))) {
-          if (count >= 3 && pc.connectionState !== "connected") {
-            maybeForceRelay(peerId, pc, "icecandidateerror");
-          }
-        }
-      };
-
-      pc.ontrack = (event) => {
-        const [stream] = event.streams;
-        if (stream) {
-          attachRemoteAudio(peerId, stream);
-        }
-      };
-
-      pc.oniceconnectionstatechange = () => {
-        voiceDebug("ice state", peerId, pc.iceConnectionState);
-      };
-      pc.onsignalingstatechange = () => {
-        voiceDebug("signaling state", peerId, pc.signalingState);
-      };
-      pc.onicegatheringstatechange = () => {
-        voiceDebug("ice gathering state", peerId, pc.iceGatheringState);
-      };
-      pc.ondatachannel = (event) => {
-        voiceDebug("datachannel received", peerId, event.channel.label);
-        setupPositionDataChannel(peerId, event.channel);
-      };
-
-      pc.onnegotiationneeded = async () => {
-        voiceDebug("negotiationneeded", peerId);
-        const state = negotiationStateFor(peerId);
-        if (!this.selfId) {
-          voiceDebug("skip negotiationneeded (missing selfId)", peerId);
-          return;
-        }
-        if (state.renegotiateSuspended) {
-          voiceDebug("skip negotiationneeded (suspended)", peerId);
-          return;
-        }
-        if (pc.signalingState !== "stable") {
-          voiceDebug("skip negotiationneeded (not stable)", peerId, pc.signalingState);
-          return;
-        }
-        if (state.makingOffer || state.pendingOffer) {
-          voiceDebug("skip negotiationneeded (offer in flight)", peerId);
-          return;
-        }
-        if (!isInitiatorFor(this.selfId, peerId)) {
-          voiceDebug("skip negotiationneeded (not initiator)", peerId);
-          return;
-        }
-
-        state.makingOffer = true;
-        state.pendingOffer = true;
-        try {
-          ensureAudioTransceiver(pc);
-          await pc.setLocalDescription(await pc.createOffer({ offerToReceiveAudio: true }));
-          voiceDebug("setLocalDescription offer", peerId, pc.signalingState);
-          this.connection?.sendSignal(peerId, { type: "offer", sdp: pc.localDescription?.sdp });
-          voiceDebug("renegotiation offer sent to", peerId);
-        } catch (error) {
-          console.warn("Voice chat: renegotiation failed", error);
-          state.renegotiateSuspended = true;
-          voiceDebug("suspend renegotiation after failure", peerId);
-        } finally {
-          state.makingOffer = false;
-          state.pendingOffer = false;
-        }
-      };
-
-      pc.onconnectionstatechange = () => {
-        voiceDebug("pc state", peerId, pc.connectionState);
-        if (pc.connectionState === "connected") {
-          const state = negotiationStateFor(peerId);
-          state.iceRestarted = false;
-        }
-        if (pc.connectionState === "failed") {
-          const state = negotiationStateFor(peerId);
-          if (!state.iceRestarted) {
-            state.iceRestarted = true;
-            maybeForceRelay(peerId, pc, "connection failed");
-            try {
-              pc.restartIce();
-            } catch (error) {
-              console.warn("Voice chat: restartIce failed", error);
-            }
-            return;
-          }
-        }
-        if (pc.connectionState === "failed" || pc.connectionState === "closed") {
-          cleanupPeer(peerId);
-        }
-      };
-
-      if (
-        this.selfId &&
-        isInitiatorFor(this.selfId, peerId) &&
-        !this.peerDataChannels.has(peerId)
-      ) {
-        const channel = pc.createDataChannel("position");
-        setupPositionDataChannel(peerId, channel);
+    const createPeer = async (peerId: string, initiator: boolean): Promise<Peer.Instance> => {
+      if (this.peers.has(peerId)) {
+        return this.peers.get(peerId)!;
       }
 
       const stream = await ensureLocalStream();
+      const peer = new Peer({
+        initiator,
+        trickle: true,
+        config: {
+          iceServers: this.iceServers,
+          bundlePolicy: "max-bundle",
+          iceTransportPolicy: "all",
+        },
+      });
+
+      this.peers.set(peerId, peer);
+      voiceDebug(
+        "simple-peer created",
+        peerId,
+        "initiator",
+        initiator,
+        "iceServers",
+        (this.iceServers || []).map((s) => s.urls)
+      );
+
+      peer.on("signal", (data: Peer.SignalData) => {
+        this.connection?.sendSignal(peerId, data);
+      });
+
+      peer.on("connect", () => {
+        voiceDebug("peer connect", peerId);
+      });
+
+      peer.on("data", (data) => {
+        const text = typeof data === "string" ? data : new TextDecoder().decode(data);
+        if (!text) return;
+        try {
+          const parsed = JSON.parse(text) as unknown;
+          handleIncomingPeerPosition(peerId, parsed);
+        } catch {
+          // ignore malformed payloads
+        }
+      });
+
+      peer.on("track", (_track, stream) => {
+        attachRemoteAudio(peerId, stream);
+      });
+
+      peer.on("close", () => {
+        cleanupPeer(peerId);
+      });
+
+      peer.on("error", (err) => {
+        console.warn("Voice chat: peer error", peerId, err);
+      });
+
       if (stream) {
         for (const track of stream.getAudioTracks()) {
-          pc.addTrack(track, stream);
-          voiceDebug("addTrack to new peer", peerId, track.id);
+          peer.addTrack(track, stream);
+          voiceDebug("addTrack to peer", peerId, track.id);
         }
       }
 
-      return pc;
+      return peer;
     };
 
     const attachLocalToExistingPeers = async () => {
@@ -586,20 +327,13 @@ export default class VoiceChat {
       if (!stream) return;
 
       const tracks = stream.getAudioTracks();
-      for (const pc of this.rtcPeers.values()) {
-        const senders = pc.getSenders();
-        const hasTrack = senders.some((s) => s.track && s.track.kind === "audio");
-        if (hasTrack) continue;
+      for (const [peerId, peer] of this.peers.entries()) {
         for (const track of tracks) {
           try {
-            pc.addTrack(track, stream);
-            voiceDebug("backfill track to existing peer", track.id);
+            peer.addTrack(track, stream);
+            voiceDebug("backfill track to existing peer", peerId, track.id);
           } catch (error) {
             console.warn("Voice chat: failed to add track to existing peer", error);
-            // If adding tracks triggers m-line mismatch, stop further renegotiation attempts.
-            for (const [peerId, state] of this.peerNegotiationState.entries()) {
-              state.renegotiateSuspended = true;
-            }
           }
         }
       }
@@ -719,85 +453,13 @@ export default class VoiceChat {
       });
       this.connection.onSignal(async (message) => {
         const { from, payload } = message;
-        voiceDebug("signal recv", from, payload && (payload as { type?: string }).type);
-        const pc = (await createPeerConnection(from))!;
-
-        if (!payload || typeof payload !== "object") {
-          return;
-        }
-
-        if ((payload as { type?: string }).type === "offer") {
-          const state = negotiationStateFor(from);
-          const polite = this.selfId ? isPoliteFor(this.selfId, from) : false;
-          const offerCollision = state.makingOffer || pc.signalingState !== "stable";
-          state.ignoreOffer = !polite && offerCollision;
-
-          if (state.ignoreOffer) {
-            voiceDebug("ignore offer due to glare (impolite)", from);
-            return;
-          }
-          state.ignoreOffer = false;
-
-          try {
-            const offer = new RTCSessionDescription(payload as RTCSessionDescriptionInit);
-            if (offerCollision) {
-              await pc.setLocalDescription({ type: "rollback" });
-            }
-            await pc.setRemoteDescription(offer);
-            await flushPendingCandidates(from, pc);
-
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            this.connection?.sendSignal(from, { type: "answer", sdp: answer.sdp });
-            voiceDebug("processed remote offer", from, "collision", offerCollision);
-          } catch (error) {
-            console.warn("Voice chat: failed to handle remote offer", error);
-            state.renegotiateSuspended = true;
-            voiceDebug("suspend renegotiation after remote-offer failure", from);
-          }
-          return;
-        }
-
-        if ((payload as { type?: string }).type === "answer") {
-          const state = negotiationStateFor(from);
-          try {
-            await pc.setRemoteDescription(
-              new RTCSessionDescription({
-                type: "answer",
-                sdp: (payload as { sdp?: string }).sdp,
-              })
-            );
-            state.ignoreOffer = false;
-            await flushPendingCandidates(from, pc);
-            voiceDebug("received answer from", from);
-          } catch (error) {
-            console.warn("Voice chat: failed to apply answer", error);
-          }
-          return;
-        }
-
-        if ((payload as { candidate?: unknown }).candidate) {
-          const candidateInit = payload as RTCIceCandidateInit;
-          const state = negotiationStateFor(from);
-          if (state.ignoreOffer) {
-            voiceDebug("drop candidate due to ignored offer", from);
-            return;
-          }
-          const normalized = normalizeCandidate(pc, candidateInit);
-          if (!normalized) {
-            voiceDebug("drop candidate without mid/mline", from);
-            return;
-          }
-          if (!pc.remoteDescription) {
-            queueIceCandidate(from, normalized);
-            return;
-          }
-          try {
-            await pc.addIceCandidate(normalized);
-            voiceDebug("received candidate from", from);
-          } catch (error) {
-            console.warn("Voice chat: failed to add ICE candidate", error);
-          }
+        voiceDebug("signal recv", from);
+        if (!payload) return;
+        const peer = await createPeer(from, false);
+        try {
+          peer.signal(payload as Peer.SignalData);
+        } catch (error) {
+          console.warn("Voice chat: failed to handle signal", error);
         }
       });
       this.connection.onSignalDeliveryFailed((targetId) => {
@@ -820,35 +482,12 @@ export default class VoiceChat {
         } else {
           ensurePeerCapsule(peerId);
         }
-        const pc = await createPeerConnection(peerId);
-        if (!pc) return;
-        // Initial offer is still started by the deterministic initiator to reduce glare.
-        if (isInitiatorFor(playerId, peerId)) {
-          const state = negotiationStateFor(peerId);
-          state.makingOffer = true;
-          state.pendingOffer = true;
-          try {
-            ensureAudioTransceiver(pc);
-            await pc.setLocalDescription(await pc.createOffer({ offerToReceiveAudio: true }));
-            voiceDebug("setLocalDescription offer (init)", peerId, pc.signalingState);
-            this.connection?.sendSignal(peerId, { type: "offer", sdp: pc.localDescription?.sdp });
-            voiceDebug("sent offer to", peerId);
-          } catch (error) {
-            console.warn("Voice chat: failed to create initial offer", error);
-            state.renegotiateSuspended = true;
-            voiceDebug("suspend renegotiation after initial-offer failure", peerId);
-          } finally {
-            state.makingOffer = false;
-            state.pendingOffer = false;
-          }
-        } else {
-          voiceDebug("not initiator for peer", peerId);
-        }
+        const initiator = isInitiatorFor(playerId, peerId);
+        await createPeer(peerId, initiator);
       });
 
       voicePeerManager.onDisconnect((peerId) => {
         cleanupPeer(peerId);
-        removePeerCapsule(peerId);
         voiceDebug("peer disconnect event", peerId);
       });
 
