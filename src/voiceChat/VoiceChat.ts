@@ -52,7 +52,13 @@ export default class VoiceChat {
   totalPlayers: number | null = null;
   peerNegotiationState = new Map<
     string,
-    { makingOffer: boolean; ignoreOffer: boolean; iceRestarted: boolean }
+    {
+      makingOffer: boolean;
+      ignoreOffer: boolean;
+      iceRestarted: boolean;
+      pendingOffer: boolean;
+      renegotiateSuspended: boolean;
+    }
   >();
   pendingIce = new Map<string, RTCIceCandidateInit[]>();
   iceErrorCounts = new Map<string, number>();
@@ -314,7 +320,13 @@ export default class VoiceChat {
     const negotiationStateFor = (peerId: string) => {
       let state = this.peerNegotiationState.get(peerId);
       if (!state) {
-        state = { makingOffer: false, ignoreOffer: false, iceRestarted: false };
+        state = {
+          makingOffer: false,
+          ignoreOffer: false,
+          iceRestarted: false,
+          pendingOffer: false,
+          renegotiateSuspended: false,
+        };
         this.peerNegotiationState.set(peerId, state);
       }
       return state;
@@ -324,6 +336,9 @@ export default class VoiceChat {
 
     const candidateHasMidOrIndex = (c: RTCIceCandidateInit) =>
       !!c.sdpMid || typeof c.sdpMLineIndex === "number";
+
+    const candidateStringLooksValid = (c: RTCIceCandidateInit) =>
+      typeof c.candidate === "string" && c.candidate.trim().startsWith("candidate:");
 
     const normalizeCandidate = (pc: RTCPeerConnection, c: RTCIceCandidateInit) => {
       // Drop hopeless candidates.
@@ -345,6 +360,14 @@ export default class VoiceChat {
         return { ...c, sdpMLineIndex: 0 };
       }
 
+      if (!candidateStringLooksValid(c)) {
+        return null;
+      }
+
+      if (c.candidate?.includes("raddr 0.0.0.0") || c.candidate?.includes("rport 0")) {
+        return null;
+      }
+
       return c;
     };
 
@@ -352,7 +375,7 @@ export default class VoiceChat {
       const pc = this.rtcPeers.get(peerId);
       const normalized = pc
         ? normalizeCandidate(pc, candidate)
-        : candidateHasMidOrIndex(candidate)
+        : candidateHasMidOrIndex(candidate) && candidateStringLooksValid(candidate)
           ? candidate
           : null;
       if (!normalized) {
@@ -471,12 +494,25 @@ export default class VoiceChat {
           voiceDebug("skip negotiationneeded (missing selfId)", peerId);
           return;
         }
+        if (state.renegotiateSuspended) {
+          voiceDebug("skip negotiationneeded (suspended)", peerId);
+          return;
+        }
         if (pc.signalingState !== "stable") {
           voiceDebug("skip negotiationneeded (not stable)", peerId, pc.signalingState);
           return;
         }
+        if (state.makingOffer || state.pendingOffer) {
+          voiceDebug("skip negotiationneeded (offer in flight)", peerId);
+          return;
+        }
+        if (!isInitiatorFor(this.selfId, peerId)) {
+          voiceDebug("skip negotiationneeded (not initiator)", peerId);
+          return;
+        }
 
         state.makingOffer = true;
+        state.pendingOffer = true;
         try {
           ensureAudioTransceiver(pc);
           await pc.setLocalDescription(await pc.createOffer({ offerToReceiveAudio: true }));
@@ -485,8 +521,10 @@ export default class VoiceChat {
           voiceDebug("renegotiation offer sent to", peerId);
         } catch (error) {
           console.warn("Voice chat: renegotiation failed", error);
+          state.renegotiateSuspended = true;
         } finally {
           state.makingOffer = false;
+          state.pendingOffer = false;
         }
       };
 
@@ -549,6 +587,10 @@ export default class VoiceChat {
             voiceDebug("backfill track to existing peer", track.id);
           } catch (error) {
             console.warn("Voice chat: failed to add track to existing peer", error);
+            // If adding tracks triggers m-line mismatch, stop further renegotiation attempts.
+            for (const [peerId, state] of this.peerNegotiationState.entries()) {
+              state.renegotiateSuspended = true;
+            }
           }
         }
       }
@@ -701,6 +743,7 @@ export default class VoiceChat {
             voiceDebug("processed remote offer", from, "collision", offerCollision);
           } catch (error) {
             console.warn("Voice chat: failed to handle remote offer", error);
+            state.renegotiateSuspended = true;
           }
           return;
         }
@@ -773,6 +816,7 @@ export default class VoiceChat {
         if (isInitiatorFor(playerId, peerId)) {
           const state = negotiationStateFor(peerId);
           state.makingOffer = true;
+          state.pendingOffer = true;
           try {
             ensureAudioTransceiver(pc);
             await pc.setLocalDescription(await pc.createOffer({ offerToReceiveAudio: true }));
@@ -781,8 +825,10 @@ export default class VoiceChat {
             voiceDebug("sent offer to", peerId);
           } catch (error) {
             console.warn("Voice chat: failed to create initial offer", error);
+            state.renegotiateSuspended = true;
           } finally {
             state.makingOffer = false;
+            state.pendingOffer = false;
           }
         } else {
           voiceDebug("not initiator for peer", peerId);
