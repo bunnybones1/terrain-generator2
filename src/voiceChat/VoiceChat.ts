@@ -340,11 +340,7 @@ export default class VoiceChat {
     const candidateStringLooksValid = (c: RTCIceCandidateInit) =>
       typeof c.candidate === "string" && c.candidate.trim().startsWith("candidate:");
 
-    const normalizeCandidate = (
-      pc: RTCPeerConnection,
-      c: RTCIceCandidateInit,
-      peerId?: string
-    ) => {
+    const normalizeCandidate = (pc: RTCPeerConnection, c: RTCIceCandidateInit, peerId?: string) => {
       // Drop hopeless candidates.
       if (!candidateHasMidOrIndex(c)) {
         // If there is exactly one media section, try to coerce to mid "0".
@@ -442,7 +438,11 @@ export default class VoiceChat {
         iceTransportPolicy: "all",
       });
       voiceDebug("pc config", peerId, pc.getConfiguration());
-      voiceDebug("ice servers", peerId, (this.iceServers || []).map((s) => s.urls));
+      voiceDebug(
+        "ice servers",
+        peerId,
+        (this.iceServers || []).map((s) => s.urls)
+      );
       this.rtcPeers.set(peerId, pc);
 
       // Keep a stable m-line order by ensuring an audio transceiver exists up front.
@@ -824,11 +824,11 @@ export default class VoiceChat {
         if (!pc) return;
         // Initial offer is still started by the deterministic initiator to reduce glare.
         if (isInitiatorFor(playerId, peerId)) {
-        const state = negotiationStateFor(peerId);
-        state.makingOffer = true;
-        state.pendingOffer = true;
-        try {
-          ensureAudioTransceiver(pc);
+          const state = negotiationStateFor(peerId);
+          state.makingOffer = true;
+          state.pendingOffer = true;
+          try {
+            ensureAudioTransceiver(pc);
             await pc.setLocalDescription(await pc.createOffer({ offerToReceiveAudio: true }));
             voiceDebug("setLocalDescription offer (init)", peerId, pc.signalingState);
             this.connection?.sendSignal(peerId, { type: "offer", sdp: pc.localDescription?.sdp });
